@@ -83,6 +83,7 @@ interface Props {
   ownedItems: string[];
   initialCustomColor: string | null;
   initialBillboardImages: string[];
+  initialLedBannerText: string | null;
   billboardSlots: number;
   buildingDims: BuildingDims;
   achievements?: string[];
@@ -624,6 +625,7 @@ export default function ShopClient({
   ownedItems,
   initialCustomColor,
   initialBillboardImages,
+  initialLedBannerText,
   billboardSlots: initialBillboardSlots,
   buildingDims,
   achievements = [],
