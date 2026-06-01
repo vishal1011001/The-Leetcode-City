@@ -2,6 +2,8 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { createBrowserClient } from "@supabase/ssr";
 
 let browserClient: ReturnType<typeof createBrowserClient> | null = null;
+// 1. Declare a module-level cache variable for the admin instance
+let adminClient: SupabaseClient | null = null;
 
 /**
  * Returns true when running without the service-role key.
@@ -30,6 +32,8 @@ export function createBrowserSupabase() {
  */
 let adminClientWarned = false;
 export function getSupabaseAdmin(): SupabaseClient {
+  // 2. Check if the instance has already been initialized in memory
+  if (adminClient) return adminClient;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!process.env.SUPABASE_SERVICE_ROLE_KEY && !adminClientWarned) {
@@ -40,11 +44,12 @@ export function getSupabaseAdmin(): SupabaseClient {
     );
   }
 
-  return createClient(
+  adminClient = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     key!,
     { auth: { persistSession: false } }
   );
+  return adminClient;
 }
 
 /**
