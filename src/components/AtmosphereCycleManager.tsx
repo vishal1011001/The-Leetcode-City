@@ -3,6 +3,7 @@
 import * as THREE from "three";
 import { useRef, useMemo, useEffect } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
+import { useGLTF } from "@react-three/drei";
 
 // Helper to interpolate two hex colors using THREE.Color
 function lerpColor(c1: string, c2: string, alpha: number): string {
@@ -756,7 +757,7 @@ function AmbientOceanShips({ cityRadius }: { cityRadius: number }) {
 // ─── Flying City Ships (Sci-Fi Hovering Skyships inside the city) ──────────────────────
 interface FlyingShipData {
   id: number;
-  type: "cargo" | "yacht" | "patrol" | "taxi";
+  type: "cargo" | "yacht" | "patrol" | "taxi" | "airplane";
   pathType: "circle" | "line";
   radius: number;
   angle: number;
@@ -806,6 +807,19 @@ function createMiniLedTexture(text: string, color: string, bgColor: string) {
   return { tex };
 }
 
+function FlyingAirplane({ s }: { s: FlyingShipData }) {
+  const { scene } = useGLTF("/models/paper-plane.glb");
+  const clonedScene = useMemo(() => {
+    return scene.clone();
+  }, [scene]);
+
+  return (
+    <group scale={[1.0, 1.0, 1.0]} rotation={[0, Math.PI / 2, 0]}>
+      <primitive object={clonedScene} />
+    </group>
+  );
+}
+
 function FlyingCityShips({ cityRadius }: { cityRadius: number }) {
   const groupRef = useRef<THREE.Group>(null);
 
@@ -832,23 +846,22 @@ function FlyingCityShips({ cityRadius }: { cityRadius: number }) {
     ];
 
     for (let i = 0; i < 16; i++) {
-      const type = types[i % types.length];
+      const hasBanner = (i % 4 === 0);
+      const type = hasBanner ? "airplane" : types[i % types.length];
       const pathType = rng() > 0.55 ? "circle" : "line";
       const radius = cityRadius * (0.22 + rng() * 0.65); // inside the circular city
       const angle = rng() * Math.PI * 2;
       const speed = 25 + rng() * 30; // cruising speed inside the city
-      const altitude = 110 + rng() * 140; // fly gracefully between the skyscrapers
+      const altitude = hasBanner ? (235 + rng() * 75) : (110 + rng() * 140); // fly gracefully above buildings for airplanes
       const direction = rng() > 0.5 ? 1 : -1;
 
       const lineStart = -cityRadius * 0.85;
       const lineEnd = cityRadius * 0.85;
       const lineOffset = (rng() - 0.5) * cityRadius * 1.4;
 
-      const scaleVal = 2.4 + rng() * 1.6; // beautiful presence
+      const scaleVal = hasBanner ? (6.5 + rng() * 2.5) : (2.4 + rng() * 1.6); // bigger/prominent for airplanes
       const scale: [number, number, number] = [scaleVal, scaleVal, scaleVal];
 
-      // Alternating ships (e.g. index 0, 4, 8, 12) tow dynamic code banners!
-      const hasBanner = (i % 4 === 0);
       let bannerResources;
       if (hasBanner) {
         const text = bannerTexts[(i / 4) % bannerTexts.length];
@@ -1068,6 +1081,10 @@ function FlyingCityShips({ cityRadius }: { cityRadius: number }) {
             </>
           )}
 
+          {s.type === "airplane" && (
+            <FlyingAirplane s={s} />
+          )}
+
           {/* Towable dynamic LED banner inside the city! */}
           {s.hasBanner && s.bannerResources && (
             <group position={[0, -0.25, -3.0]}>
@@ -1080,7 +1097,7 @@ function FlyingCityShips({ cityRadius }: { cityRadius: number }) {
               </mesh>
               {/* LED Banner Plane - Side 1 */}
               <mesh position={[0, 0, -0.1]} rotation={[0, Math.PI / 2, 0]}>
-                <planeGeometry args={[3.2, 0.7]} />
+                <planeGeometry args={[3.7, 0.7]} />
                 <meshStandardMaterial
                   color="#000000"
                   emissiveMap={s.bannerResources.tex}
@@ -1091,7 +1108,7 @@ function FlyingCityShips({ cityRadius }: { cityRadius: number }) {
               </mesh>
               {/* LED Banner Plane - Side 2 */}
               <mesh position={[0, 0, -0.1]} rotation={[0, -Math.PI / 2, 0]}>
-                <planeGeometry args={[3.2, 0.7]} />
+                <planeGeometry args={[3.7, 0.7]} />
                 <meshStandardMaterial
                   color="#000000"
                   emissiveMap={s.bannerResources.tex}
@@ -1115,6 +1132,7 @@ interface AtmosphereCycleManagerProps {
   active: boolean;
   timeRef: React.MutableRefObject<number>;
   cityRadius?: number;
+  weatherMode?: "sunny" | "rainy" | "windy" | "stormy" | "snowy";
 }
 
 export default function AtmosphereCycleManager({
@@ -1123,6 +1141,7 @@ export default function AtmosphereCycleManager({
   active,
   timeRef,
   cityRadius,
+  weatherMode = "sunny",
 }: AtmosphereCycleManagerProps) {
   const { scene } = useThree();
 
@@ -1134,11 +1153,87 @@ export default function AtmosphereCycleManager({
 
   const sunGroupRef = useRef<THREE.Group>(null);
   const moonGroupRef = useRef<THREE.Group>(null);
+  const boltGroupRef = useRef<THREE.Group>(null);
+  const boltRef = useRef({
+    visible: false,
+    startX: 0,
+    startZ: 0,
+    dx1: 0,
+    dz1: 0,
+    dx2: 0,
+    dz2: 0,
+  });
+
+  // Lightning state inside AtmosphereCycleManager
+  const lightningTimeRef = useRef(0);
+  const nextLightningTimeRef = useRef(4 + Math.random() * 8); // strike every 4-12 seconds
+  const lightningIntensityRef = useRef(0);
 
   // Time loop (7 minutes full cycle with extended day and same night)
-  useFrame((state) => {
+  useFrame((state, delta) => {
     const { clock, camera } = state;
     let t = 0.0;
+
+    // Simulate Thunderstorm Lightning Flashes
+    let lightningIntensity = 0;
+    if (weatherMode === "stormy" && active) {
+      lightningTimeRef.current += delta;
+      if (lightningTimeRef.current >= nextLightningTimeRef.current) {
+        lightningTimeRef.current = 0;
+        nextLightningTimeRef.current = 5 + Math.random() * 8; // strike every 5-13 seconds
+        
+        // Generate new procedural jagged lightning bolt path
+        boltRef.current = {
+          visible: true,
+          startX: (Math.random() - 0.5) * (cityRadius ?? 800) * 1.5,
+          startZ: (Math.random() - 0.5) * (cityRadius ?? 800) * 1.5,
+          dx1: (Math.random() - 0.5) * 140 + (Math.random() > 0.5 ? 60 : -60),
+          dz1: (Math.random() - 0.5) * 140 + (Math.random() > 0.5 ? 60 : -60),
+          dx2: (Math.random() - 0.5) * 140 + (Math.random() > 0.5 ? 60 : -60),
+          dz2: (Math.random() - 0.5) * 140 + (Math.random() > 0.5 ? 60 : -60),
+        };
+      }
+      
+      const elapsed = lightningTimeRef.current;
+      // Real lightning double strike/flicker
+      if (elapsed < 0.08) {
+        lightningIntensity = 3.8;
+      } else if (elapsed < 0.15) {
+        lightningIntensity = 0.5;
+      } else if (elapsed < 0.25) {
+        lightningIntensity = 4.8;
+      } else if (elapsed < 0.5) {
+        lightningIntensity = 4.8 * (1.0 - (elapsed - 0.25) / 0.25);
+      }
+      lightningIntensityRef.current = lightningIntensity;
+    } else {
+      lightningIntensityRef.current = 0;
+    }
+
+    // Update physical bolt positions
+    if (boltGroupRef.current) {
+      const visible = lightningIntensity > 0 && weatherMode === "stormy";
+      boltGroupRef.current.visible = visible;
+      if (visible) {
+        const b = boltRef.current;
+        const children = boltGroupRef.current.children;
+        if (children.length >= 5) {
+          // Segment 1 (Vertical top)
+          children[0].position.set(b.startX, 290, b.startZ);
+          // Segment 2 (Horizontal link 1)
+          children[1].position.set(b.startX + b.dx1/2, 260, b.startZ + b.dz1/2);
+          children[1].scale.set(Math.abs(b.dx1) + 8, 8, Math.abs(b.dz1) + 8);
+          // Segment 3 (Vertical middle)
+          children[2].position.set(b.startX + b.dx1, 190, b.startZ + b.dz1);
+          // Segment 4 (Horizontal link 2)
+          children[3].position.set(b.startX + b.dx1 + b.dx2/2, 150, b.startZ + b.dz1 + b.dz2/2);
+          children[3].scale.set(Math.abs(b.dx2) + 8, 8, Math.abs(b.dz2) + 8);
+          // Segment 5 (Vertical bottom)
+          children[4].position.set(b.startX + b.dx1 + b.dx2, 70, b.startZ + b.dz1 + b.dz2);
+        }
+      }
+    }
+
     if (active) {
       const cycleDuration = 420; // 7 minutes total cycle
       const rawProgress = (clock.elapsedTime / cycleDuration) % 1.0;
@@ -1190,52 +1285,64 @@ export default function AtmosphereCycleManager({
       const currentHemiGround = lerpColor(s1.hemiGround, s2.hemiGround, f);
       const currentHemiIntensity = s1.hemiIntensity + (s2.hemiIntensity - s1.hemiIntensity) * f;
 
-      // 1. Update Fog
+      // 1. Update Fog (darken into stormy charcoal grey under stormy conditions, or a cozy cold winter grey under snowy conditions)
+      let fogColorToUse = currentFog;
+      if (weatherMode === "stormy") {
+        fogColorToUse = lerpColor(currentFog, "#0b0c10", 0.78);
+      } else if (weatherMode === "snowy") {
+        fogColorToUse = lerpColor(currentFog, "#c8d6e5", 0.65);
+      }
+
       const fog = scene.fog as THREE.Fog | null;
       if (fog) {
-        fog.color.set(currentFog);
+        fog.color.set(lightningIntensity > 0 ? "#e2f0ff" : fogColorToUse);
       }
-      scene.background = new THREE.Color(currentFog);
+      scene.background = new THREE.Color(lightningIntensity > 0 ? "#cbd5e1" : fogColorToUse);
 
       // 2. Update Lights
       if (ambientLightRef.current) {
-        ambientLightRef.current.color.set(currentAmbientColor);
-        ambientLightRef.current.intensity = currentAmbientIntensity * 3.0;
+        ambientLightRef.current.color.set(lightningIntensity > 0 ? "#cbd5e1" : currentAmbientColor);
+        ambientLightRef.current.intensity = (currentAmbientIntensity + lightningIntensity * 0.7) * 3.0;
       }
 
       // Calculate dynamic positions for Sun and Moon
       const theta = 2.0 * Math.PI * t - Math.PI / 2.0;
 
       if (sunLightRef.current) {
-        sunLightRef.current.color.set(currentSunColor);
+        sunLightRef.current.color.set(lightningIntensity > 0 ? "#e2f0ff" : currentSunColor);
         sunLightRef.current.position.set(
           Math.cos(theta) * 600,
           Math.sin(theta) * 500,
           -200
         );
         const isAboveHorizon = Math.sin(theta) > 0.0;
+        let intensityFactor = 1.0;
+        if (weatherMode === "snowy") {
+          intensityFactor = 0.45; // Dim the sun for cozy snow clouds!
+        }
         sunLightRef.current.intensity = isAboveHorizon
-          ? Math.sin(theta) * currentSunIntensity * 3.5
-          : 0.0;
+          ? Math.sin(theta) * currentSunIntensity * 3.5 * intensityFactor + lightningIntensity * 1.5
+          : lightningIntensity * 1.5;
       }
 
       if (fillLightRef.current) {
-        fillLightRef.current.color.set(currentFillColor);
+        fillLightRef.current.color.set(lightningIntensity > 0 ? "#cbd5e1" : currentFillColor);
         fillLightRef.current.position.set(
           -Math.cos(theta) * 600,
           -Math.sin(theta) * 500,
           200
         );
         const sunIsBelowHorizon = Math.sin(theta) <= 0.0;
-        fillLightRef.current.intensity = sunIsBelowHorizon
+        const baseIntensity = sunIsBelowHorizon
           ? -Math.sin(theta) * currentFillIntensity * 2.5
           : (1.0 - Math.sin(theta)) * currentFillIntensity * 1.5;
+        fillLightRef.current.intensity = baseIntensity + lightningIntensity * 1.2;
       }
 
       if (hemiLightRef.current) {
-        hemiLightRef.current.color.set(currentHemiSky);
+        hemiLightRef.current.color.set(lightningIntensity > 0 ? "#e2f0ff" : currentHemiSky);
         hemiLightRef.current.groundColor.set(currentHemiGround);
-        hemiLightRef.current.intensity = currentHemiIntensity * 3.5;
+        hemiLightRef.current.intensity = (currentHemiIntensity + lightningIntensity * 0.6) * 3.5;
       }
 
       // 3. Move Physical Sun and Moon relative to camera (unreachable background elements)
@@ -1341,6 +1448,30 @@ export default function AtmosphereCycleManager({
       <VoxelClouds active={active} timeRef={timeRef} />
       <AmbientOceanShips cityRadius={cityRadius ?? 800} />
       <FlyingCityShips cityRadius={cityRadius ?? 800} />
+
+      {/* Visual Jagged Lightning Bolt (Voxel Aesthetic, themed accent color) */}
+      <group ref={boltGroupRef} visible={false}>
+        <mesh>
+          <boxGeometry args={[8, 60, 8]} />
+          <meshBasicMaterial color={theme.accent} toneMapped={false} />
+        </mesh>
+        <mesh>
+          <boxGeometry args={[1, 1, 1]} />
+          <meshBasicMaterial color={theme.accent} toneMapped={false} />
+        </mesh>
+        <mesh>
+          <boxGeometry args={[8, 80, 8]} />
+          <meshBasicMaterial color={theme.accent} toneMapped={false} />
+        </mesh>
+        <mesh>
+          <boxGeometry args={[1, 1, 1]} />
+          <meshBasicMaterial color={theme.accent} toneMapped={false} />
+        </mesh>
+        <mesh>
+          <boxGeometry args={[8, 160, 8]} />
+          <meshBasicMaterial color={theme.accent} toneMapped={false} />
+        </mesh>
+      </group>
 
       {/* Physical Sun */}
       <group ref={sunGroupRef}>

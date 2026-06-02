@@ -568,6 +568,17 @@ function HomeContent() {
   const [exploreMode, setExploreMode] = useState(false);
   const [themeIndex, setThemeIndex] = useState(0);
   const [dayNightCycleActive, setDayNightCycleActive] = useState(true);
+  const [weatherMode, setWeatherMode] = useState<"sunny" | "rainy" | "windy" | "stormy" | "snowy">("sunny");
+
+  const cycleWeather = () => {
+    const modes: ("sunny" | "rainy" | "windy" | "stormy" | "snowy")[] = ["sunny", "rainy", "windy", "stormy", "snowy"];
+    const idx = modes.indexOf(weatherMode);
+    const next = modes[(idx + 1) % modes.length];
+    setWeatherMode(next);
+    try {
+      localStorage.setItem("leetcodecity_weather_mode", next);
+    } catch {}
+  };
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -580,6 +591,12 @@ function HomeContent() {
       const savedCycle = localStorage.getItem("leetcodecity_daynight_cycle");
       if (savedCycle === "0") {
         setDayNightCycleActive(false);
+      }
+    } catch {}
+    try {
+      const savedWeather = localStorage.getItem("leetcodecity_weather_mode");
+      if (savedWeather === "sunny" || savedWeather === "rainy" || savedWeather === "windy" || savedWeather === "stormy" || savedWeather === "snowy") {
+        setWeatherMode(savedWeather as any);
       }
     } catch {}
   }, []);
@@ -2621,6 +2638,7 @@ function HomeContent() {
         onExitFly={endFly}
         themeIndex={themeIndex}
         dayNightCycleActive={dayNightCycleActive}
+        weatherMode={weatherMode}
         onHud={(s, a, x, z, yaw) => {
           setHud({ speed: s, altitude: a });
           // Look-ahead: ~40u ahead of airplane = center of screen
@@ -5717,6 +5735,8 @@ function HomeContent() {
             isMounted={isMounted}
             dayNightCycleActive={dayNightCycleActive}
             setDayNightCycleActive={setDayNightCycleActive}
+            weatherMode={weatherMode}
+            cycleWeather={cycleWeather}
           />
         </div>
       )}

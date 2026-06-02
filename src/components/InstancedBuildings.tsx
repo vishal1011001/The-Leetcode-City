@@ -66,6 +66,7 @@ const fragmentShader = /* glsl */ `
   uniform float uDimEmissive;
   uniform float uCityEnergy;
   uniform float uTimeOfDay; // 0.0 = Night, 1.0 = Day
+  uniform float uSnowIntensity; // 0.0 to 1.0
 
   varying vec2 vUv;
   varying vec3 vNormal;
@@ -119,10 +120,17 @@ const fragmentShader = /* glsl */ `
     vec3 emissive = wallColor * nightGlowMultiplier * energyCube * isWindow;
 
     vec3 wallFinal = wallColor * ambientBase + emissive;
+    if (uSnowIntensity > 0.01) {
+      vec3 frostColor = vec3(0.93, 0.95, 1.0);
+      wallFinal = mix(wallFinal, frostColor * ambientBase, uSnowIntensity * 0.12);
+    }
     vec3 liveBoost = vec3(1.4, 1.35, 1.2);
     wallFinal = mix(wallFinal, wallFinal * liveBoost, vLive);
 
     vec3 roofFinal = uRoofColor * (ambientDay + 1.4 * uCityEnergy);
+    vec3 snowColor = vec3(0.97, 0.98, 1.0);
+    roofFinal = mix(roofFinal, snowColor * (ambientDay + 1.0), uSnowIntensity);
+
     vec3 color = mix(wallFinal, roofFinal, isRoof);
 
     // Directional light changes based on time
@@ -183,6 +191,7 @@ interface InstancedBuildingsProps {
   liveByLogin?: Map<string, unknown>;
   cityEnergy?: number;
   timeRef?: React.MutableRefObject<number>;
+  weatherMode?: "sunny" | "rainy" | "windy" | "stormy" | "snowy";
 }
 
 interface RiseState {
@@ -208,6 +217,7 @@ export default memo(function InstancedBuildings({
   liveByLogin,
   cityEnergy = 1.0,
   timeRef,
+  weatherMode = "sunny",
 }: InstancedBuildingsProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const count = buildings.length;
@@ -236,6 +246,7 @@ export default memo(function InstancedBuildings({
         uDimEmissive: { value: dimEmissive },
         uCityEnergy: { value: cityEnergy },
         uTimeOfDay: { value: 1.0 },
+        uSnowIntensity: { value: weatherMode === "snowy" ? 1.0 : 0.0 },
       },
       vertexShader,
       fragmentShader,
@@ -251,8 +262,9 @@ export default memo(function InstancedBuildings({
     material.uniforms.uDimOpacity.value = dimOpacity;
     material.uniforms.uDimEmissive.value = dimEmissive;
     material.uniforms.uCityEnergy.value = cityEnergy;
+    material.uniforms.uSnowIntensity.value = weatherMode === "snowy" ? 1.0 : 0.0;
     material.needsUpdate = true;
-  }, [atlasTexture, colors.roof, colors.face, dimOpacity, dimEmissive, cityEnergy, material]);
+  }, [atlasTexture, colors.roof, colors.face, dimOpacity, dimEmissive, cityEnergy, weatherMode, material]);
 
   const { uvFrontData, uvSideData, riseData, tintData, lcData } =
     useMemo(() => {

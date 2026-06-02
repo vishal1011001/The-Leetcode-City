@@ -1065,7 +1065,7 @@ function Ground({ color, grid1, grid2 }: { color: string; grid1: string; grid2: 
   return null;
 }
 
-function CircularCityPlatform({ radius, color }: { radius: number; color: string }) {
+function CircularCityPlatform({ radius, color, weatherMode }: { radius: number; color: string; weatherMode?: string }) {
   const platformRadius = radius + 120;
 
   const { supportColumns, concretePaths } = useMemo(() => {
@@ -1111,10 +1111,10 @@ function CircularCityPlatform({ radius, color }: { radius: number; color: string
       <mesh position={[0, 0.2, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <circleGeometry args={[platformRadius, 128]} />
         <meshStandardMaterial
-          color={color}
-          emissive={color}
-          emissiveIntensity={0.18}
-          roughness={0.9}
+          color={weatherMode === "snowy" ? "#f8fafc" : color}
+          emissive={weatherMode === "snowy" ? "#e2e8f0" : color}
+          emissiveIntensity={weatherMode === "snowy" ? 0.05 : 0.18}
+          roughness={weatherMode === "snowy" ? 0.98 : 0.9}
         />
       </mesh>
       {/* Concrete ring paths (walkways where trees/lamps sit) */}
@@ -1122,9 +1122,9 @@ function CircularCityPlatform({ radius, color }: { radius: number; color: string
         <mesh key={`path-${r}`} position={[0, 0.35, 0]} rotation={[-Math.PI / 2, 0, 0]}>
           <ringGeometry args={[r - 16, r + 16, 128]} />
           <meshStandardMaterial
-            color="#4a5564"
-            emissive="#2a3040"
-            emissiveIntensity={0.2}
+            color={weatherMode === "snowy" ? "#f1f5f9" : "#4a5564"}
+            emissive={weatherMode === "snowy" ? "#cbd5e1" : "#2a3040"}
+            emissiveIntensity={weatherMode === "snowy" ? 0.05 : 0.2}
             roughness={0.95}
           />
         </mesh>
@@ -1138,10 +1138,10 @@ function CircularCityPlatform({ radius, color }: { radius: number; color: string
         >
           <torusGeometry args={[platformRadius * scale, 2.4, 8, 160]} />
           <meshStandardMaterial
-            color="#5a7186"
-            emissive="#263849"
-            emissiveIntensity={0.35}
-            roughness={0.82}
+            color={weatherMode === "snowy" ? "#f8fafc" : "#5a7186"}
+            emissive={weatherMode === "snowy" ? "#cbd5e1" : "#263849"}
+            emissiveIntensity={weatherMode === "snowy" ? 0.1 : 0.35}
+            roughness={weatherMode === "snowy" ? 0.95 : 0.82}
           />
         </mesh>
       ))}
@@ -1964,6 +1964,7 @@ interface Props {
   wallpaperSpeed?: number;
   liveByLogin?: Map<string, LiveSession>;
   cityEnergy?: number;
+  weatherMode?: "sunny" | "rainy" | "windy" | "stormy" | "snowy";
 }
 
 // Dynamically adjust scene exposure based on city energy (devs coding)
@@ -1986,7 +1987,7 @@ function CityExposure({ cityEnergy }: { cityEnergy: number }) {
 // Plaza indices for rabbit sightings (progressively further from center)
 const RABBIT_PLAZA_INDICES = [1, 2, 4, 7, 10]; // plazas[1]=slot3, [2]=slot7, [4]=slot18, [7]=slot42, [10]=slot75
 
-export default function CityCanvas({ buildings, plazas, decorations, river, bridges, flyMode, flyVehicle, onExitFly, onCollect, themeIndex, dayNightCycleActive, onHud, onPause, focusedBuilding, focusedBuildingB, accentColor, onClearFocus, onBuildingClick, onFocusInfo, flyPauseSignal, flyHasOverlay, flyStartPaused, skyAds, onAdClick, onAdViewed, introMode, onIntroEnd, raidPhase, raidData, raidAttacker, raidDefender, onRaidPhaseComplete, onLandmarkClick, rabbitSighting, onRabbitCaught, rabbitCinematic, onRabbitCinematicEnd, rabbitCinematicTarget, ghostPreviewLogin, holdRise, celebrationActive, wallpaperMode, wallpaperSpeed, liveByLogin, cityEnergy }: Props) {
+export default function CityCanvas({ buildings, plazas, decorations, river, bridges, flyMode, flyVehicle, onExitFly, onCollect, themeIndex, dayNightCycleActive, onHud, onPause, focusedBuilding, focusedBuildingB, accentColor, onClearFocus, onBuildingClick, onFocusInfo, flyPauseSignal, flyHasOverlay, flyStartPaused, skyAds, onAdClick, onAdViewed, introMode, onIntroEnd, raidPhase, raidData, raidAttacker, raidDefender, onRaidPhaseComplete, onLandmarkClick, rabbitSighting, onRabbitCaught, rabbitCinematic, onRabbitCinematicEnd, rabbitCinematicTarget, ghostPreviewLogin, holdRise, celebrationActive, wallpaperMode, wallpaperSpeed, liveByLogin, cityEnergy, weatherMode = "sunny" }: Props) {
   const t = THEMES[themeIndex] ?? THEMES[0];
   const showPerf = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("perf");
   const flyPosRef = useRef(new THREE.Vector3());
@@ -2059,6 +2060,7 @@ export default function CityCanvas({ buildings, plazas, decorations, river, brid
         active={dayNightCycleActive ?? false}
         timeRef={timeRef}
         cityRadius={cityRadius}
+        weatherMode={weatherMode}
       />
 
       {introMode && <IntroFlyover onEnd={onIntroEnd ?? (() => { })} />}
@@ -2100,7 +2102,7 @@ export default function CityCanvas({ buildings, plazas, decorations, river, brid
 
       <InfiniteWater waterColor={t.waterColor} waterEmissive={t.waterEmissive} />
       <Ground key={`ground-${themeIndex}`} color={t.groundColor} grid1={t.grid1} grid2={t.grid2} />
-      <CircularCityPlatform radius={cityRadius} color={t.groundColor} />
+      <CircularCityPlatform radius={cityRadius} color={t.groundColor} weatherMode={weatherMode} />
 
       <FounderSpire onClick={onLandmarkClick ?? (() => { })} />
 
@@ -2138,6 +2140,7 @@ export default function CityCanvas({ buildings, plazas, decorations, river, brid
         liveByLogin={liveByLogin}
         cityEnergy={cityEnergy}
         timeRef={timeRef}
+        weatherMode={weatherMode}
       />
 
       <InstancedDecorations items={decorations} roadMarkingColor={t.roadMarkingColor} sidewalkColor={t.sidewalkColor} />

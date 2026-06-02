@@ -63,8 +63,8 @@ const ShimmerShader = {
     void main() {
       // Calculate dual-axis sine displacement to mimic localized air currents
       vec2 distortion = vec2(
-        sin(vWorldPosition.x * 2.0 + uTime * HEAT_SHIMMER_SPEED),
-        cos(vWorldPosition.z * 2.0 + uTime * HEAT_SHIMMER_SPEED)
+        sin(vWorldPosition.x * 2.0 + uTime * 1.4),
+        cos(vWorldPosition.z * 2.0 + uTime * 1.4)
       ) * uStrength;
 
       float noiseMask = noise(vUv + vec2(0.0, uTime * 0.1));

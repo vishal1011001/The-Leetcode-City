@@ -12,6 +12,8 @@ interface ActionToolbarProps {
   isMounted: boolean;
   dayNightCycleActive: boolean;
   setDayNightCycleActive: React.Dispatch<React.SetStateAction<boolean>>;
+  weatherMode?: "sunny" | "rainy" | "windy" | "stormy" | "snowy";
+  cycleWeather?: () => void;
 }
 
 const ActionToolbar: React.FC<ActionToolbarProps> = ({
@@ -23,6 +25,8 @@ const ActionToolbar: React.FC<ActionToolbarProps> = ({
   isMounted,
   dayNightCycleActive,
   setDayNightCycleActive,
+  weatherMode = "sunny",
+  cycleWeather = () => {},
 }) => {
   return (
     <div className="flex items-center gap-2">
@@ -35,7 +39,7 @@ const ActionToolbar: React.FC<ActionToolbarProps> = ({
         <span className="text-cream">{theme.name}</span>
         <span className="text-dim">{themeIndex + 1}/{themesLength}</span>
       </button>
-
+ 
       {/* Day/Night Cycle Button */}
       <button
         onClick={() => {
@@ -55,6 +59,15 @@ const ActionToolbar: React.FC<ActionToolbarProps> = ({
       >
         <span style={{ color: theme.accent }}>&#9654;</span>
         <span>{dayNightCycleActive ? "CYCLE ON" : "CYCLE OFF"}</span>
+      </button>
+ 
+      {/* Weather Selector Button */}
+      <button
+        onClick={cycleWeather}
+        className="btn-press flex items-center gap-1.5 border-[3px] border-border bg-bg/70 px-2.5 py-1 text-[10px] backdrop-blur-sm transition-colors hover:border-border-light text-cream"
+      >
+        <span style={{ color: theme.accent }}>&#9654;</span>
+        <span>WEATHER: {weatherMode.toUpperCase()}</span>
       </button>
 
       {/* Audio/Radio Slot if mounted */}
