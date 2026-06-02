@@ -1087,16 +1087,16 @@ function FlyingCityShips({ cityRadius }: { cityRadius: number }) {
 
           {/* Towable dynamic LED banner inside the city! */}
           {s.hasBanner && s.bannerResources && (
-            <group position={[0, -0.25, -3.0]}>
+            <group position={[0, -0.25, 3.0]}>
               {/* Left & Right Tow Ropes */}
-              <mesh position={[0.3, 0.1, 0.7]} rotation={[Math.PI / 2, 0, 0.1]} geometry={cylinderGeo} scale={[0.03, 1.4, 0.03]}>
+              <mesh position={[0.3, 0.1, -0.7]} rotation={[-Math.PI / 2, 0, 0.1]} geometry={cylinderGeo} scale={[0.03, 1.4, 0.03]}>
                 <meshBasicMaterial color="#ffffff" transparent opacity={0.4} />
               </mesh>
-              <mesh position={[-0.3, 0.1, 0.7]} rotation={[Math.PI / 2, 0, -0.1]} geometry={cylinderGeo} scale={[0.03, 1.4, 0.03]}>
+              <mesh position={[-0.3, 0.1, -0.7]} rotation={[-Math.PI / 2, 0, -0.1]} geometry={cylinderGeo} scale={[0.03, 1.4, 0.03]}>
                 <meshBasicMaterial color="#ffffff" transparent opacity={0.4} />
               </mesh>
               {/* LED Banner Plane - Side 1 */}
-              <mesh position={[0, 0, -0.1]} rotation={[0, Math.PI / 2, 0]}>
+              <mesh position={[0, 0, 0.1]} rotation={[0, Math.PI / 2, 0]}>
                 <planeGeometry args={[3.7, 0.7]} />
                 <meshStandardMaterial
                   color="#000000"
@@ -1107,7 +1107,7 @@ function FlyingCityShips({ cityRadius }: { cityRadius: number }) {
                 />
               </mesh>
               {/* LED Banner Plane - Side 2 */}
-              <mesh position={[0, 0, -0.1]} rotation={[0, -Math.PI / 2, 0]}>
+              <mesh position={[0, 0, 0.1]} rotation={[0, -Math.PI / 2, 0]}>
                 <planeGeometry args={[3.7, 0.7]} />
                 <meshStandardMaterial
                   color="#000000"
