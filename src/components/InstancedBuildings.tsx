@@ -262,9 +262,8 @@ export default memo(function InstancedBuildings({
     material.uniforms.uDimOpacity.value = dimOpacity;
     material.uniforms.uDimEmissive.value = dimEmissive;
     material.uniforms.uCityEnergy.value = cityEnergy;
-    material.uniforms.uSnowIntensity.value = weatherMode === "snowy" ? 1.0 : 0.0;
     material.needsUpdate = true;
-  }, [atlasTexture, colors.roof, colors.face, dimOpacity, dimEmissive, cityEnergy, weatherMode, material]);
+  }, [atlasTexture, colors.roof, colors.face, dimOpacity, dimEmissive, cityEnergy, material]);
 
   const { uvFrontData, uvSideData, riseData, tintData, lcData } =
     useMemo(() => {
@@ -438,9 +437,12 @@ export default memo(function InstancedBuildings({
   const lastFogFar = useRef(0);
   const cityEnergyRef = useRef(cityEnergy);
   cityEnergyRef.current = cityEnergy;
+  const weatherModeRef = useRef(weatherMode);
+  weatherModeRef.current = weatherMode;
+  const snowIntensityRef = useRef(weatherMode === "snowy" ? 1.0 : 0.0);
 
   // Global Time Cycle Logic
-  useFrame(({ scene, clock }) => {
+  useFrame(({ scene, clock }, delta) => {
     if (!material.uniforms) return;
     const fog = scene.fog as THREE.Fog | null;
     if (!fog) return;
@@ -465,6 +467,10 @@ export default memo(function InstancedBuildings({
     if (Math.abs(current - target) > 0.001) {
       material.uniforms.uCityEnergy.value += (target - current) * 0.04;
     }
+
+    const snowTarget = weatherModeRef.current === "snowy" ? 1.0 : 0.0;
+    snowIntensityRef.current = THREE.MathUtils.lerp(snowIntensityRef.current, snowTarget, delta * 0.8);
+    material.uniforms.uSnowIntensity.value = snowIntensityRef.current;
   });
 
   useEffect(() => {

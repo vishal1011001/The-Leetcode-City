@@ -58,6 +58,7 @@ import {
 import LoadingScreen, { type LoadingStage } from "@/components/LoadingScreen";
 import MiniMap from "@/components/MiniMap";
 import CityAnalyticsDashboard from "@/components/CityAnalyticsDashboard";
+import { useWeather } from "@/lib/useWeather";
 import { getCityCache, setCityCache, clearCityCache } from "@/lib/cityCache";
 import {
   DEFAULT_SKY_ADS,
@@ -578,16 +579,12 @@ function HomeContent() {
   const [themeIndex, setThemeIndex] = useState(0);
   const [isCodexOpen, setIsCodexOpen] = useState(false);
   const [dayNightCycleActive, setDayNightCycleActive] = useState(true);
-  const [weatherMode, setWeatherMode] = useState<"sunny" | "rainy" | "windy" | "stormy" | "snowy">("sunny");
+  const { weatherMode, setWeatherMode, cityName, isLoading: weatherLoading, searchByCity } = useWeather();
 
   const cycleWeather = () => {
     const modes: ("sunny" | "rainy" | "windy" | "stormy" | "snowy")[] = ["sunny", "rainy", "windy", "stormy", "snowy"];
     const idx = modes.indexOf(weatherMode);
-    const next = modes[(idx + 1) % modes.length];
-    setWeatherMode(next);
-    try {
-      localStorage.setItem("leetcodecity_weather_mode", next);
-    } catch { }
+    setWeatherMode(modes[(idx + 1) % modes.length]);
   };
 
   useEffect(() => {
@@ -601,12 +598,6 @@ function HomeContent() {
       const savedCycle = localStorage.getItem("leetcodecity_daynight_cycle");
       if (savedCycle === "0") {
         setDayNightCycleActive(false);
-      }
-    } catch { }
-    try {
-      const savedWeather = localStorage.getItem("leetcodecity_weather_mode");
-      if (savedWeather === "sunny" || savedWeather === "rainy" || savedWeather === "windy" || savedWeather === "stormy" || savedWeather === "snowy") {
-        setWeatherMode(savedWeather as any);
       }
     } catch { }
   }, []);
@@ -5817,6 +5808,9 @@ function HomeContent() {
             setDayNightCycleActive={setDayNightCycleActive}
             weatherMode={weatherMode}
             cycleWeather={cycleWeather}
+            cityName={cityName}
+            searchByCity={searchByCity}
+            weatherLoading={weatherLoading}
           />
         </div>
       )}

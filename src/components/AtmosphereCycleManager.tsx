@@ -1625,6 +1625,11 @@ export default function AtmosphereCycleManager({
       const fog = scene.fog as THREE.Fog | null;
       if (fog) {
         fog.color.set(lightningIntensity > 0 ? "#e2f0ff" : fogColorToUse);
+        // Tighten fog distance in snowy mode for reduced-visibility effect
+        const fogNearTarget = weatherMode === "snowy" ? 300 : theme.fogNear;
+        const fogFarTarget  = weatherMode === "snowy" ? 1400 : theme.fogFar;
+        fog.near = THREE.MathUtils.lerp(fog.near, fogNearTarget, delta * 0.5);
+        fog.far  = THREE.MathUtils.lerp(fog.far,  fogFarTarget,  delta * 0.5);
       }
       scene.background = new THREE.Color(lightningIntensity > 0 ? "#cbd5e1" : fogColorToUse);
 

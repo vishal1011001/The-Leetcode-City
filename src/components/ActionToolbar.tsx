@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useRef } from 'react';
 
 interface ActionToolbarProps {
   cycleTheme: () => void;
@@ -14,6 +14,9 @@ interface ActionToolbarProps {
   setDayNightCycleActive: React.Dispatch<React.SetStateAction<boolean>>;
   weatherMode?: "sunny" | "rainy" | "windy" | "stormy" | "snowy";
   cycleWeather?: () => void;
+  cityName?: string | null;
+  searchByCity?: (city: string) => void;
+  weatherLoading?: boolean;
 }
 
 const ActionToolbar: React.FC<ActionToolbarProps> = ({
@@ -27,7 +30,23 @@ const ActionToolbar: React.FC<ActionToolbarProps> = ({
   setDayNightCycleActive,
   weatherMode = "sunny",
   cycleWeather = () => {},
+  cityName,
+  searchByCity,
+  weatherLoading = false,
 }) => {
+  const [cityInputOpen, setCityInputOpen] = useState(false);
+  const [cityDraft, setCityDraft] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleCitySubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (cityDraft.trim() && searchByCity) {
+      searchByCity(cityDraft.trim());
+      setCityDraft("");
+      setCityInputOpen(false);
+    }
+  };
+
   return (
     <div className="flex items-center gap-2">
       {/* Theme Cycle Button */}
@@ -39,7 +58,7 @@ const ActionToolbar: React.FC<ActionToolbarProps> = ({
         <span className="text-cream">{theme.name}</span>
         <span className="text-dim">{themeIndex + 1}/{themesLength}</span>
       </button>
- 
+
       {/* Day/Night Cycle Button */}
       <button
         onClick={() => {
@@ -60,15 +79,51 @@ const ActionToolbar: React.FC<ActionToolbarProps> = ({
         <span style={{ color: theme.accent }}>&#9654;</span>
         <span>{dayNightCycleActive ? "CYCLE ON" : "CYCLE OFF"}</span>
       </button>
- 
-      {/* Weather Selector Button */}
-      <button
-        onClick={cycleWeather}
-        className="btn-press flex items-center gap-1.5 border-[3px] border-border bg-bg/70 px-2.5 py-1 text-[10px] backdrop-blur-sm transition-colors hover:border-border-light text-cream"
-      >
-        <span style={{ color: theme.accent }}>&#9654;</span>
-        <span>WEATHER: {weatherMode.toUpperCase()}</span>
-      </button>
+
+      {/* Weather Controls */}
+      <div className="flex items-center gap-1">
+        {/* Weather cycle button — click to cycle mode */}
+        <button
+          onClick={cycleWeather}
+          className="btn-press flex items-center gap-1.5 border-[3px] border-border bg-bg/70 px-2.5 py-1 text-[10px] backdrop-blur-sm transition-colors hover:border-border-light text-cream"
+        >
+          <span style={{ color: theme.accent }}>&#9654;</span>
+          <span>
+            {weatherLoading ? "..." : weatherMode.toUpperCase()}
+            {cityName && !weatherLoading && (
+              <span className="text-dim ml-1 normal-case">({cityName})</span>
+            )}
+          </span>
+        </button>
+
+        {/* City search toggle */}
+        {searchByCity && (
+          <button
+            onClick={() => {
+              setCityInputOpen((v) => !v);
+              if (!cityInputOpen) setTimeout(() => inputRef.current?.focus(), 50);
+            }}
+            title="Search by city"
+            className="btn-press flex items-center border-[3px] border-border bg-bg/70 px-1.5 py-1 text-[10px] backdrop-blur-sm transition-colors hover:border-border-light text-dim"
+          >
+            &#9906;
+          </button>
+        )}
+
+        {/* Inline city search input */}
+        {cityInputOpen && searchByCity && (
+          <form onSubmit={handleCitySubmit} className="flex items-center">
+            <input
+              ref={inputRef}
+              value={cityDraft}
+              onChange={(e) => setCityDraft(e.target.value)}
+              onKeyDown={(e) => e.key === "Escape" && setCityInputOpen(false)}
+              placeholder="City name..."
+              className="border-[3px] border-border bg-bg/90 px-2 py-1 text-[10px] text-cream outline-none placeholder:text-dim backdrop-blur-sm w-28"
+            />
+          </form>
+        )}
+      </div>
 
       {/* Audio/Radio Slot if mounted */}
       {isMounted && <div id="gc-radio-slot" />}

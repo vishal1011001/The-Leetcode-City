@@ -1065,6 +1065,18 @@ function Ground({ color, grid1, grid2 }: { color: string; grid1: string; grid2: 
   return null;
 }
 
+// Pre-allocated color constants for snow lerp (avoid per-frame allocations)
+const _SNOW_TOP_COLOR   = new THREE.Color("#f8fafc");
+const _SNOW_TOP_EMIT    = new THREE.Color("#e2e8f0");
+const _PATH_BASE_COLOR  = new THREE.Color("#4a5564");
+const _PATH_BASE_EMIT   = new THREE.Color("#2a3040");
+const _PATH_SNOW_COLOR  = new THREE.Color("#f1f5f9");
+const _PATH_SNOW_EMIT   = new THREE.Color("#cbd5e1");
+const _TORUS_BASE_COLOR = new THREE.Color("#5a7186");
+const _TORUS_BASE_EMIT  = new THREE.Color("#263849");
+const _TORUS_SNOW_COLOR = new THREE.Color("#f8fafc");
+const _TORUS_SNOW_EMIT  = new THREE.Color("#cbd5e1");
+
 function CircularCityPlatform({ radius, color, weatherMode }: { radius: number; color: string; weatherMode?: string }) {
   const platformRadius = radius + 120;
 
@@ -1080,8 +1092,6 @@ function CircularCityPlatform({ radius, color, weatherMode }: { radius: number; 
       ]);
     }
 
-    // Concrete ring paths matching decoration ring positions
-    // These are the same radii used in rebuildCircularCityDecorations
     const CENTER_CLEARANCE = 170;
     const RING_SPACING = 72;
     const paths: number[] = [];
@@ -1094,54 +1104,71 @@ function CircularCityPlatform({ radius, color, weatherMode }: { radius: number; 
     return { supportColumns: columns, concretePaths: paths };
   }, [radius, platformRadius]);
 
+  // Material refs for imperative lerp
+  const topMatRef   = useRef<THREE.MeshStandardMaterial>(null);
+  const pathMatRefs = useRef<(THREE.MeshStandardMaterial | null)[]>([]);
+  const torMatRefs  = useRef<(THREE.MeshStandardMaterial | null)[]>([]);
+  const snowIntRef  = useRef(weatherMode === "snowy" ? 1.0 : 0.0);
+  const weatherRef  = useRef(weatherMode);
+  weatherRef.current = weatherMode;
+  const baseColorRef = useRef(new THREE.Color(color));
+  useEffect(() => { baseColorRef.current.set(color); }, [color]);
+
+  useFrame((_, delta) => {
+    const target = weatherRef.current === "snowy" ? 1.0 : 0.0;
+    snowIntRef.current = THREE.MathUtils.lerp(snowIntRef.current, target, delta * 0.8);
+    const t = snowIntRef.current;
+
+    if (topMatRef.current) {
+      topMatRef.current.color.lerpColors(baseColorRef.current, _SNOW_TOP_COLOR, t);
+      topMatRef.current.emissive.lerpColors(baseColorRef.current, _SNOW_TOP_EMIT, t);
+      topMatRef.current.emissiveIntensity = THREE.MathUtils.lerp(0.18, 0.05, t);
+      topMatRef.current.roughness = THREE.MathUtils.lerp(0.9, 0.98, t);
+    }
+    for (const m of pathMatRefs.current) {
+      if (!m) continue;
+      m.color.lerpColors(_PATH_BASE_COLOR, _PATH_SNOW_COLOR, t);
+      m.emissive.lerpColors(_PATH_BASE_EMIT, _PATH_SNOW_EMIT, t);
+      m.emissiveIntensity = THREE.MathUtils.lerp(0.2, 0.05, t);
+    }
+    for (const m of torMatRefs.current) {
+      if (!m) continue;
+      m.color.lerpColors(_TORUS_BASE_COLOR, _TORUS_SNOW_COLOR, t);
+      m.emissive.lerpColors(_TORUS_BASE_EMIT, _TORUS_SNOW_EMIT, t);
+      m.emissiveIntensity = THREE.MathUtils.lerp(0.35, 0.1, t);
+      m.roughness = THREE.MathUtils.lerp(0.82, 0.95, t);
+    }
+  });
+
   return (
     <group>
       {/* Platform base (cylinder wall) */}
       <mesh position={[0, -14, 0]}>
         <cylinderGeometry args={[platformRadius, platformRadius + 44, 28, 128]} />
-        <meshStandardMaterial
-          color="#05070a"
-          emissive="#000000"
-          emissiveIntensity={0.0}
-          roughness={0.95}
-          metalness={0.1}
-        />
+        <meshStandardMaterial color="#05070a" emissive="#000000" emissiveIntensity={0.0} roughness={0.95} metalness={0.1} />
       </mesh>
       {/* Platform top surface */}
       <mesh position={[0, 0.2, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <circleGeometry args={[platformRadius, 128]} />
-        <meshStandardMaterial
-          color={weatherMode === "snowy" ? "#f8fafc" : color}
-          emissive={weatherMode === "snowy" ? "#e2e8f0" : color}
-          emissiveIntensity={weatherMode === "snowy" ? 0.05 : 0.18}
-          roughness={weatherMode === "snowy" ? 0.98 : 0.9}
-        />
+        <meshStandardMaterial ref={topMatRef} color={color} emissive={color} emissiveIntensity={0.18} roughness={0.9} />
       </mesh>
       {/* Concrete ring paths (walkways where trees/lamps sit) */}
-      {concretePaths.map((r) => (
+      {concretePaths.map((r, i) => (
         <mesh key={`path-${r}`} position={[0, 0.35, 0]} rotation={[-Math.PI / 2, 0, 0]}>
           <ringGeometry args={[r - 16, r + 16, 128]} />
           <meshStandardMaterial
-            color={weatherMode === "snowy" ? "#f1f5f9" : "#4a5564"}
-            emissive={weatherMode === "snowy" ? "#cbd5e1" : "#2a3040"}
-            emissiveIntensity={weatherMode === "snowy" ? 0.05 : 0.2}
-            roughness={0.95}
+            ref={(el) => { pathMatRefs.current[i] = el; }}
+            color="#4a5564" emissive="#2a3040" emissiveIntensity={0.2} roughness={0.95}
           />
         </mesh>
       ))}
       {/* Perimeter decorative torus rings */}
-      {[0.48, 0.68, 0.86, 1].map((scale) => (
-        <mesh
-          key={scale}
-          position={[0, 0.9 + scale, 0]}
-          rotation={[Math.PI / 2, 0, 0]}
-        >
+      {[0.48, 0.68, 0.86, 1].map((scale, i) => (
+        <mesh key={scale} position={[0, 0.9 + scale, 0]} rotation={[Math.PI / 2, 0, 0]}>
           <torusGeometry args={[platformRadius * scale, 2.4, 8, 160]} />
           <meshStandardMaterial
-            color={weatherMode === "snowy" ? "#f8fafc" : "#5a7186"}
-            emissive={weatherMode === "snowy" ? "#cbd5e1" : "#263849"}
-            emissiveIntensity={weatherMode === "snowy" ? 0.1 : 0.35}
-            roughness={weatherMode === "snowy" ? 0.95 : 0.82}
+            ref={(el) => { torMatRefs.current[i] = el; }}
+            color="#5a7186" emissive="#263849" emissiveIntensity={0.35} roughness={0.82}
           />
         </mesh>
       ))}
@@ -1149,12 +1176,7 @@ function CircularCityPlatform({ radius, color, weatherMode }: { radius: number; 
       {supportColumns.map(([x, z], i) => (
         <mesh key={i} position={[x, -48, z]}>
           <cylinderGeometry args={[9, 15, 80, 10]} />
-          <meshStandardMaterial
-            color="#1b2530"
-            emissive="#0f1720"
-            emissiveIntensity={0.25}
-            roughness={0.95}
-          />
+          <meshStandardMaterial color="#1b2530" emissive="#0f1720" emissiveIntensity={0.25} roughness={0.95} />
         </mesh>
       ))}
     </group>

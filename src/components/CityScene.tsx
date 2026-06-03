@@ -12,6 +12,8 @@ import SunnyWeather from "./SunnyWeather";
 import type { LiveSession } from "@/lib/useCodingPresence";
 import type { CityBuilding } from "@/lib/github";
 import type { BuildingColors } from "./CityCanvas";
+import { SnowWeather } from "./SnowWeather";
+
 
 
 const GRID_CELL_SIZE = 200;
@@ -119,7 +121,7 @@ interface CitySceneProps {
   weatherMode?: "sunny" | "rainy" | "windy" | "stormy" | "snowy";
 }
 
-function WeatherSystem({ weatherMode }: { weatherMode: "sunny" | "rainy" | "windy" | "stormy" | "snowy" }) {
+function WeatherSystem({ weatherMode, buildings, focusedBuilding }: { weatherMode: "sunny" | "rainy" | "windy" | "stormy" | "snowy", buildings?: CityBuilding[], focusedBuilding?: string | null }) {
   const pointsRef = useRef<THREE.Points>(null);
   const leavesRef = useRef<THREE.Points>(null);
   const { camera } = useThree();
@@ -274,6 +276,7 @@ function WeatherSystem({ weatherMode }: { weatherMode: "sunny" | "rainy" | "wind
       />
     );
   }
+  if (weatherMode === "snowy") return <SnowWeather buildings={buildings} focusedBuilding={focusedBuilding} />;
 
   // Weather style adjustments
   let particleColor = "#a7c7ff";
@@ -285,13 +288,9 @@ function WeatherSystem({ weatherMode }: { weatherMode: "sunny" | "rainy" | "wind
     size = 4.5;
     opacity = 0.5;
   } else if (weatherMode === "stormy") {
-    particleColor = "#cbd5e1"; // thick grey-ish downpour particles
+    particleColor = "#cbd5e1";
     size = 6.0;
     opacity = 0.8;
-  } else if (weatherMode === "snowy") {
-    particleColor = "#ffffff"; // Beautiful fluffy white snow flakes
-    size = 6.0;
-    opacity = 0.9;
   }
 
   return (
@@ -446,8 +445,7 @@ export default function CityScene({
         flyMode={flyMode}
         ghostPreviewLogin={ghostPreviewLogin}
       />
-
-      {!introMode && <WeatherSystem weatherMode={weatherMode} />}
+      {!introMode && <WeatherSystem weatherMode={weatherMode} buildings={buildings} focusedBuilding={focusedBuilding} />}
 
       {!introMode && focusedBuildingData && (
         <group
