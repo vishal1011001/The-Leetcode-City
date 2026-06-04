@@ -4,6 +4,7 @@ import SearchBar from "@/components/SearchBar";
 import UserProfile from "@/components/UserProfile";
 import ActionToolbar from "@/components/ActionToolbar";
 import CodexModal from "@/components/CodexModal";
+import { WeatherProvider } from '@/context/WeatherContext';
 
 import {
   useState,
@@ -6597,7 +6598,9 @@ function HomeContent() {
 export default function Home() {
   return (
     <Suspense>
-      <HomeContent />
+      <WeatherProvider>
+        <HomeContent />
+      </WeatherProvider>
     </Suspense>
   );
 }

@@ -35,6 +35,7 @@ import {
 } from "./BuildingEffects";
 import { tierFromLevel } from "@/lib/xp";
 import { MiniWhiteRabbit } from "./WhiteRabbit";
+import { useWeather } from '@/context/WeatherContext';
 
 // Shared constants
 const WHITE = new THREE.Color("#ffffff");
@@ -568,6 +569,7 @@ export default function Building3D({ building, colors, atlasTexture, introMode, 
   const meshRef = useRef<THREE.Mesh>(null);
   const spriteRef = useRef<THREE.Sprite>(null);
   const pointerDown = useRef<{ x: number; y: number } | null>(null);
+  const { isRaining } = useWeather();
 
   // Compute actual dimensions based on style (matches ShopPreview logic)
   const isBungalow = building.building_style === "bungalow";
@@ -621,6 +623,24 @@ export default function Building3D({ building, colors, atlasTexture, introMode, 
   }, [building, colors, atlasTexture, isBungalow, W, H, D]);
 
   useEffect(() => {
+    // Wet surface simulation loop
+  useFrame((state, delta) => {
+    if (!materials || materials.length === 0) return;
+
+    materials.forEach((mat, idx) => {
+      // Index 2 and 3 are the roof material (starts at 0.6), others are walls (start at 0.85)
+      const isRoof = idx === 2 || idx === 3;
+      const baseRoughness = isRoof ? 0.6 : 0.85;
+
+      // When raining, surfaces become highly reflective (low roughness) and slightly metallic
+      const targetRoughness = isRaining ? 0.15 : baseRoughness;
+      const targetMetalness = isRaining ? 0.25 : 0.0;
+
+      // Linearly interpolate (lerp) values over time for a smooth transition vibe
+      mat.roughness = THREE.MathUtils.lerp(mat.roughness, targetRoughness, delta * 2);
+      mat.metalness = THREE.MathUtils.lerp(mat.metalness, targetMetalness, delta * 2);
+    });
+  });
     return () => {
       textures.front.dispose();
       textures.side.dispose();
