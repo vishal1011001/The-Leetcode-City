@@ -68,9 +68,10 @@ export default function FounderMessage({ onClose }: FounderMessageProps) {
 
   // Fade in overlay
   useEffect(() => {
-    requestAnimationFrame(() => {
+    const animId = requestAnimationFrame(() => {
       if (overlayRef.current) overlayRef.current.style.opacity = "1";
     });
+    return () => cancelAnimationFrame(animId);
   }, []);
 
   // Blinking cursor

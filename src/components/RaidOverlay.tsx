@@ -18,6 +18,7 @@ function AnimatedScore({ target, duration = 1200 }: { target: number; duration?:
   useEffect(() => {
     if (target <= 0) return;
     startRef.current = null;
+    let animId: number;
 
     function animate(ts: number) {
       if (!startRef.current) startRef.current = ts;
@@ -25,10 +26,11 @@ function AnimatedScore({ target, duration = 1200 }: { target: number; duration?:
       // easeOutExpo
       const eased = progress === 1 ? 1 : 1 - Math.pow(2, -10 * progress);
       setValue(Math.round(eased * target));
-      if (progress < 1) requestAnimationFrame(animate);
+      if (progress < 1) animId = requestAnimationFrame(animate);
     }
 
-    requestAnimationFrame(animate);
+    animId = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(animId);
   }, [target, duration]);
 
   return <span>{value}</span>;

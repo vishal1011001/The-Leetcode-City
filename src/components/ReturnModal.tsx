@@ -31,7 +31,8 @@ export default function ReturnModal({ streakData, onClose }: Props) {
 
   // Animate in
   useEffect(() => {
-    requestAnimationFrame(() => setVisible(true));
+    const animId = requestAnimationFrame(() => setVisible(true));
+    return () => cancelAnimationFrame(animId);
   }, []);
 
   // Auto-dismiss after 4s (6s if there are new badges)

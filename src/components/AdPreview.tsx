@@ -533,16 +533,33 @@ export default function AdPreview({
   const [contextLost, setContextLost] = useState(false);
   const [canvasKey, setCanvasKey] = useState(0);
 
+  const [renderer, setRenderer] = useState<THREE.WebGLRenderer | null>(null);
+
   const handleCreated = useCallback(({ gl }: { gl: THREE.WebGLRenderer }) => {
-    const canvas = gl.domElement;
-    canvas.addEventListener("webglcontextlost", (e) => {
+    setRenderer(gl);
+  }, []);
+
+  // Handle WebGL context loss/restoration with proper cleanup
+  useEffect(() => {
+    if (!renderer) return;
+    const canvas = renderer.domElement;
+
+    const onLost = (e: Event) => {
       e.preventDefault();
       setContextLost(true);
-    });
-    canvas.addEventListener("webglcontextrestored", () => {
+    };
+    const onRestored = () => {
       setContextLost(false);
-    });
-  }, []);
+    };
+
+    canvas.addEventListener("webglcontextlost", onLost);
+    canvas.addEventListener("webglcontextrestored", onRestored);
+
+    return () => {
+      canvas.removeEventListener("webglcontextlost", onLost);
+      canvas.removeEventListener("webglcontextrestored", onRestored);
+    };
+  }, [renderer]);
 
   // If context was lost, remount the Canvas after a short delay
   useEffect(() => {
@@ -550,6 +567,7 @@ export default function AdPreview({
     const timer = setTimeout(() => {
       setCanvasKey((k) => k + 1);
       setContextLost(false);
+      setRenderer(null); // Reset renderer for the new Canvas
     }, 1000);
     return () => clearTimeout(timer);
   }, [contextLost]);

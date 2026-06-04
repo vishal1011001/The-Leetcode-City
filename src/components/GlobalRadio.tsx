@@ -27,7 +27,8 @@ export default function GlobalRadio() {
   const [canPort, setCanPort] = useState(false);
   useEffect(() => {
     if (mounted) {
-      requestAnimationFrame(() => setCanPort(true));
+      const animId = requestAnimationFrame(() => setCanPort(true));
+      return () => cancelAnimationFrame(animId);
     }
   }, [mounted]);
 
