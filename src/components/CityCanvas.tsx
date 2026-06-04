@@ -1,5 +1,5 @@
 "use client";
-
+import { isWeatherMood } from "@/lib/atmosphere";
 import { useRef, useEffect, useState, useMemo } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls, useGLTF, Stats } from "@react-three/drei";
@@ -1990,7 +1990,23 @@ function CityExposure({ cityEnergy }: { cityEnergy: number }) {
 const RABBIT_PLAZA_INDICES = [1, 2, 4, 7, 10]; // plazas[1]=slot3, [2]=slot7, [4]=slot18, [7]=slot42, [10]=slot75
 
 export default function CityCanvas({ buildings, plazas, decorations, river, bridges, flyMode, flyVehicle, onExitFly, onCollect, themeIndex, dayNightCycleActive, onHud, onPause, focusedBuilding, focusedBuildingB, accentColor, onClearFocus, onBuildingClick, onFocusInfo, flyPauseSignal, flyHasOverlay, flyStartPaused, skyAds, onAdClick, onAdViewed, introMode, onIntroEnd, raidPhase, raidData, raidAttacker, raidDefender, onRaidPhaseComplete, onLandmarkClick, rabbitSighting, onRabbitCaught, rabbitCinematic, onRabbitCinematicEnd, rabbitCinematicTarget, ghostPreviewLogin, holdRise, celebrationActive, wallpaperMode, wallpaperSpeed, liveByLogin, cityEnergy, weatherMode = "sunny" }: Props) {
-  const { isRaining } = useWeather();
+    const { isRaining, weatherMood } = useWeather();
+
+  const demoWeatherMood = useMemo(() => {
+    if (typeof window === "undefined") return null;
+
+    const params = new URLSearchParams(window.location.search);
+    const weatherParam = params.get("weatherMood");
+
+    return isWeatherMood(weatherParam) ? weatherParam : null;
+  }, []);
+
+  const effectiveWeatherMood = demoWeatherMood ?? weatherMood;
+  const effectiveIsRaining =
+    isRaining ||
+    effectiveWeatherMood === "rain" ||
+    effectiveWeatherMood === "thunderstorm";
+
   const t = THEMES[themeIndex] ?? THEMES[0];
   const showPerf = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("perf");
   const flyPosRef = useRef(new THREE.Vector3());
@@ -2063,7 +2079,7 @@ export default function CityCanvas({ buildings, plazas, decorations, river, brid
         active={dayNightCycleActive ?? false}
         timeRef={timeRef}
         cityRadius={cityRadius}
-        weatherMode={weatherMode}
+        weatherMood={effectiveWeatherMood}
       />
 
       {introMode && <IntroFlyover onEnd={onIntroEnd ?? (() => { })} />}
@@ -2161,7 +2177,7 @@ export default function CityCanvas({ buildings, plazas, decorations, river, brid
           />
         </>
       )}
-      {isRaining && (
+      {effectiveIsRaining && (
         <>
           <RainParticles />
           <color attach="background" args={['#3a404a']} />

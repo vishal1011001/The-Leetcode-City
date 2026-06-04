@@ -4,6 +4,14 @@ import * as THREE from "three";
 import { useRef, useMemo, useEffect } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
+import {
+  getAtmosphereVisualState,
+  getTimePhase,
+  isTimePhase,
+  isWeatherMood,
+  type TimePhase,
+  type WeatherMood,
+} from "@/lib/atmosphere";
 
 // Helper to interpolate two hex colors using THREE.Color
 function lerpColor(c1: string, c2: string, alpha: number): string {
@@ -46,18 +54,18 @@ const ATMOSPHERE_STATES: AtmosphereState[] = [
   },
   // 1: Dawn
   {
-    fogColor: "#4a2c3a",
-    ambientColor: "#8a6a7c",
-    ambientIntensity: 0.5,
-    sunColor: "#ffcc88",
-    sunIntensity: 0.7,
-    fillColor: "#504070",
-    fillIntensity: 0.3,
-    hemiSky: "#9a6a8c",
-    hemiGround: "#281e24",
-    hemiIntensity: 0.45,
-    skyStops: ["#080a15", "#d5836a", "#4a2c3a", "#4a2c3a", "#4a2c3a"],
-    uTimeOfDay: 0.4,
+  fogColor: "#7c4a55",
+  ambientColor: "#f7b58b",
+  ambientIntensity: 0.55,
+  sunColor: "#ffd08a",
+  sunIntensity: 0.95,
+  fillColor: "#5c4b8a",
+  fillIntensity: 0.32,
+  hemiSky: "#9fa8ff",
+  hemiGround: "#3f2a2a",
+  hemiIntensity: 0.55,
+  skyStops: ["#17142f", "#5b6ee1", "#ff9f6e", "#ffc76d", "#ffe3a3"],
+  uTimeOfDay: 0.4,
   },
   // 2: Noon (Day)
   {
@@ -76,21 +84,27 @@ const ATMOSPHERE_STATES: AtmosphereState[] = [
   },
   // 3: Sunset
   {
-    fogColor: "#602c40",
-    ambientColor: "#d08060",
-    ambientIntensity: 0.55,
-    sunColor: "#f0a060",
-    sunIntensity: 1.0,
-    fillColor: "#503060",
-    fillIntensity: 0.35,
-    hemiSky: "#c06070",
-    hemiGround: "#382028",
-    hemiIntensity: 0.6,
-    skyStops: ["#08040d", "#f0b878", "#602c40", "#602c40", "#602c40"],
-    uTimeOfDay: 0.4,
+  fogColor: "#6b2f4a",
+  ambientColor: "#d78a63",
+  ambientIntensity: 0.58,
+  sunColor: "#ffb347",
+  sunIntensity: 1.15,
+  fillColor: "#432058",
+  fillIntensity: 0.28,
+  hemiSky: "#c15f82",
+  hemiGround: "#25111e",
+  hemiIntensity: 0.56,
+  skyStops: ["#12091f", "#2b1858", "#c75a7a", "#ff8c3d", "#ffd08a"],
+  uTimeOfDay: 0.4,
   },
 ];
-
+const PHASE_TO_CYCLE_T: Record<TimePhase, number> = {
+  night: 0.0,
+  dawn: 0.25,
+  day: 0.5,
+  sunset: 0.75,
+  twilight: 0.86,
+};
 function getInterpolatedSkyStops(t: number): [number, string][] {
   const numStates = ATMOSPHERE_STATES.length;
   const val = t * numStates;
@@ -167,7 +181,7 @@ function SkyDome({
   theme,
   active,
 }: {
-  timeRef: React.MutableRefObject<number>;
+  timeRef: { current: number };
   theme: any;
   active: boolean;
 }) {
@@ -249,7 +263,7 @@ function VoxelClouds({
   timeRef,
 }: {
   active: boolean;
-  timeRef: React.MutableRefObject<number>;
+  timeRef: { current: number };
 }) {
   const groupRef = useRef<THREE.Group>(null);
 
@@ -311,7 +325,7 @@ function VoxelClouds({
     const idx2 = (idx1 + 1) % numStates;
     const f = val - Math.floor(val);
 
-    const cloudColors = ["#141c30", "#e8a898", "#ffffff", "#ff9070"];
+    const cloudColors = ["#141c30", "#ffc2a0", "#ffffff", "#ff9f7a"];
     const currentColor = lerpColor(cloudColors[idx1], cloudColors[idx2], f);
     material.color.set(currentColor);
   });
@@ -1249,7 +1263,7 @@ const sunGlowFragmentShader = `
 `;
 
 // ─── Starfield Component ───────────────────────────────────────
-function Starfield({ timeRef, active }: { timeRef: React.MutableRefObject<number>; active: boolean }) {
+function Starfield({ timeRef, active }: { timeRef: { current: number }; active: boolean }) {
   const pointsRef = useRef<THREE.Points>(null);
 
   const { positions, sizes, phases } = useMemo(() => {
@@ -1420,9 +1434,10 @@ interface AtmosphereCycleManagerProps {
   theme: any;
   themeIndex: number;
   active: boolean;
-  timeRef: React.MutableRefObject<number>;
+  timeRef: { current: number };
   cityRadius?: number;
   weatherMode?: "sunny" | "rainy" | "windy" | "stormy" | "snowy";
+  weatherMood?: WeatherMood;
 }
 
 export default function AtmosphereCycleManager({
@@ -1432,9 +1447,37 @@ export default function AtmosphereCycleManager({
   timeRef,
   cityRadius,
   weatherMode = "sunny",
+  weatherMood = "fallback",
 }: AtmosphereCycleManagerProps) {
-  const { scene } = useThree();
+    const { scene } = useThree();
 
+    const demoAtmosphere = useMemo(() => {
+    if (typeof window === "undefined") {
+      return {
+        phase: null as TimePhase | null,
+        weatherMood: null as WeatherMood | null,
+      };
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const phaseParam = params.get("phase");
+    const weatherParam = params.get("weatherMood");
+
+    return {
+      phase: isTimePhase(phaseParam) ? phaseParam : null,
+      weatherMood: isWeatherMood(weatherParam) ? weatherParam : null,
+    };
+  }, []);
+
+  const effectiveWeatherMood = demoAtmosphere.weatherMood ?? weatherMood;
+  const effectiveWeatherMode =
+    effectiveWeatherMood === "rain"
+      ? "rainy"
+      : effectiveWeatherMood === "thunderstorm"
+        ? "stormy"
+        : effectiveWeatherMood === "snow"
+          ? "snowy"
+          : weatherMode;
   const moonMaterials = useMemo(() => {
     const body = new THREE.ShaderMaterial({
       vertexShader: moonVertexShader,
@@ -1516,7 +1559,7 @@ export default function AtmosphereCycleManager({
 
     // Simulate Thunderstorm Lightning Flashes
     let lightningIntensity = 0;
-    if (weatherMode === "stormy" && active) {
+    if (effectiveWeatherMode === "stormy" && active) {
       lightningTimeRef.current += delta;
       if (lightningTimeRef.current >= nextLightningTimeRef.current) {
         lightningTimeRef.current = 0;
@@ -1552,7 +1595,7 @@ export default function AtmosphereCycleManager({
 
     // Update physical bolt positions
     if (boltGroupRef.current) {
-      const visible = lightningIntensity > 0 && weatherMode === "stormy";
+      const visible = lightningIntensity > 0 && effectiveWeatherMode === "stormy";
       boltGroupRef.current.visible = visible;
       if (visible) {
         const b = boltRef.current;
@@ -1576,20 +1619,32 @@ export default function AtmosphereCycleManager({
 
     if (active) {
       // Global Day/Night Cycle based on India Standard Time (IST: UTC+5:30)
-      const now = Date.now();
-      const istOffset = 5.5 * 60 * 60 * 1000;
-      const istTime = new Date(now + istOffset);
-      
-      const hours = istTime.getUTCHours();
-      const minutes = istTime.getUTCMinutes();
-      const seconds = istTime.getUTCSeconds();
-      const ms = istTime.getUTCMilliseconds();
-      
-      const totalMs = 24 * 60 * 60 * 1000;
-      const elapsed = (hours * 3600000) + (minutes * 60000) + (seconds * 1000) + ms;
-      
-      // t goes linearly from 0.0 (midnight) -> 0.25 (6 AM) -> 0.5 (noon) -> 0.75 (6 PM) -> 1.0 (midnight)
-      t = elapsed / totalMs;
+      if (demoAtmosphere.phase) {
+        t = PHASE_TO_CYCLE_T[demoAtmosphere.phase];
+      } else {
+        const currentPhase = getTimePhase();
+        const visualState = getAtmosphereVisualState(
+          currentPhase,
+          effectiveWeatherMood
+        );
+
+        const now = Date.now();
+        const istOffset = 5.5 * 60 * 60 * 1000;
+        const istTime = new Date(now + istOffset);
+        const hours = istTime.getUTCHours();
+        const minutes = istTime.getUTCMinutes();
+        const seconds = istTime.getUTCSeconds();
+        const ms = istTime.getUTCMilliseconds();
+        const totalMs = 24 * 60 * 60 * 1000;
+        const elapsed =
+          hours * 3600000 + minutes * 60000 + seconds * 1000 + ms;
+
+        t = elapsed / totalMs;
+
+        if (visualState.phase === "sunset" || visualState.phase === "dawn") {
+          t = PHASE_TO_CYCLE_T[visualState.phase];
+        }
+      }
 
       timeRef.current = t;
 
@@ -1616,9 +1671,9 @@ export default function AtmosphereCycleManager({
 
       // 1. Update Fog (darken into stormy charcoal grey under stormy conditions, or a cozy cold winter grey under snowy conditions)
       let fogColorToUse = currentFog;
-      if (weatherMode === "stormy") {
+      if (effectiveWeatherMode === "stormy") {
         fogColorToUse = lerpColor(currentFog, "#0b0c10", 0.78);
-      } else if (weatherMode === "snowy") {
+      } else if (effectiveWeatherMode === "snowy") {
         fogColorToUse = lerpColor(currentFog, "#c8d6e5", 0.65);
       }
 
@@ -1646,7 +1701,7 @@ export default function AtmosphereCycleManager({
         );
         const isAboveHorizon = Math.sin(theta) > 0.0;
         let intensityFactor = 1.0;
-        if (weatherMode === "snowy") {
+        if (effectiveWeatherMode === "snowy") {
           intensityFactor = 0.45; // Dim the sun for cozy snow clouds!
         }
         sunLightRef.current.intensity = isAboveHorizon
