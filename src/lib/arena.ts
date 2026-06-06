@@ -2,7 +2,13 @@ import { getSupabaseAdmin } from "./supabase";
 import { createServerSupabase } from "./supabase-server";
 import crypto from "crypto";
 
-const ENCRYPTION_KEY = process.env.ARENA_CRYPTO_KEY || "leetcode-city-arena-secret-key-32ch";
+const ENCRYPTION_KEY = process.env.ARENA_CRYPTO_KEY;
+if (!ENCRYPTION_KEY || ENCRYPTION_KEY.length < 32) {
+  throw new Error(
+    "ARENA_CRYPTO_KEY environment variable must be set to a key of at least 32 characters. " +
+    "Generate one with: openssl rand -hex 32"
+  );
+}
 
 export interface CFProblem {
   contestId?: number;
