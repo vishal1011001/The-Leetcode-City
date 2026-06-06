@@ -4,6 +4,8 @@ import SearchBar from "@/components/SearchBar";
 import UserProfile from "@/components/UserProfile";
 import ActionToolbar from "@/components/ActionToolbar";
 import CodexModal from "@/components/CodexModal";
+import ErrorBoundary from "@/components/ErrorBoundary";
+import { WeatherProvider } from '@/context/WeatherContext';
 
 import {
   useState,
@@ -102,6 +104,13 @@ interface CityStats {
 
 const CityCanvas = dynamic(() => import("@/components/CityCanvas"), {
   ssr: false,
+  loading: () => (
+    <div className="h-screen w-screen bg-black flex items-center justify-center">
+      <div className="text-[#ffa116] font-pixel text-lg animate-pulse">
+        Loading City...
+      </div>
+    </div>
+  ),
 });
 
 // Feature flags — flip to switch milestone banner
@@ -693,6 +702,7 @@ function HomeContent() {
     }
   }, [codingPanelOpen, hasVsCodeKey]);
   const [session, setSession] = useState<Session | null>(null);
+  const [sessionResolved, setSessionResolved] = useState(false);
   const [claiming, setClaiming] = useState(false);
   const [purchasedItem, setPurchasedItem] = useState<string | null>(null);
   const [selectedBuilding, setSelectedBuilding] = useState<CityBuilding | null>(
@@ -949,10 +959,12 @@ function HomeContent() {
           setLinkedLeetCodeUsername(null);
         } finally {
           setLinkStatusResolved(true);
+          setSessionResolved(true);
         }
       } else {
         setLinkedLeetCodeUsername(null);
         setLinkStatusResolved(true);
+        setSessionResolved(true);
       }
     };
 
@@ -1070,7 +1082,7 @@ function HomeContent() {
     ""
   ).toLowerCase();
   const selfLogin = (linkedLeetCodeUsername ?? authLogin).toLowerCase();
-  const identityResolved = !session || linkStatusResolved;
+  const identityResolved = sessionResolved && (!session || linkStatusResolved);
 
   // Extra guard: check if selected building is own by comparing linked account
   const isOwnBuilding =
@@ -4963,7 +4975,8 @@ function HomeContent() {
                   )}
 
                 {/* A7: Show equipped items on other devs' buildings (mimetic desire) */}
-                {!isOwnBuilding &&
+                {identityResolved &&
+                  !isOwnBuilding &&
                   (() => {
                     const equipped: string[] = [];
                     if (selectedBuilding.loadout?.crown)
@@ -6602,11 +6615,32 @@ function HomeContent() {
     </main>
   );
 }
-
 export default function Home() {
   return (
-    <Suspense>
-      <HomeContent />
-    </Suspense>
+    <ErrorBoundary fallback={
+      <div className="h-screen w-screen bg-black flex items-center justify-center">
+        <div className="text-red-500 font-pixel text-center px-4">
+          Something went wrong loading the city.
+          <button 
+            onClick={() => window.location.reload()}
+            className="block mx-auto mt-4 px-4 py-2 bg-[#ffa116] text-black font-pixel text-sm"
+          >
+            Refresh
+          </button>
+        </div>
+      </div>
+    }>
+      <WeatherProvider>
+        <Suspense fallback={
+          <div className="h-screen w-screen bg-black flex items-center justify-center">
+            <div className="text-[#ffa116] font-pixel text-lg animate-pulse">
+              Loading...
+            </div>
+          </div>
+        }>
+          <HomeContent />
+        </Suspense>
+      </WeatherProvider>
+    </ErrorBoundary>
   );
 }
