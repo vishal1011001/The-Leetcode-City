@@ -92,16 +92,55 @@ export async function POST(req: Request) {
         }
 
         const admin = getSupabaseAdmin();
+        const login = leetcode_username.toLowerCase();
 
         // Check if someone else already claimed this LeetCode username
         const { data: existingClaim } = await admin
             .from("developers")
             .select("claimed_by")
-            .eq("github_login", leetcode_username.toLowerCase())
+            .eq("github_login", login)
             .maybeSingle();
 
         if (existingClaim && existingClaim.claimed_by && existingClaim.claimed_by !== user.id) {
-            return NextResponse.json({ error: "This GitHub account is already linked to another LeetCode user." }, { status: 409 });
+            return NextResponse.json({ error: "This LeetCode account is already linked to another user." }, { status: 409 });
+        }
+
+        // Generate consistent github_id substitute for LC users
+        let hash = 0;
+        for (let i = 0; i < login.length; i++) {
+            hash = Math.imul(31, hash) + login.charCodeAt(i) | 0;
+        }
+        const github_id = Math.abs(hash);
+
+        // Atomic claim to prevent TOCTOU race conditions
+        if (existingClaim && !existingClaim.claimed_by) {
+            const { data: atomicUpdate } = await admin
+                .from("developers")
+                .update({ claimed_by: user.id, claimed: true, claimed_at: new Date().toISOString() })
+                .eq("github_login", login)
+                .is("claimed_by", null)
+                .select("id")
+                .maybeSingle();
+            
+            if (!atomicUpdate) {
+                return NextResponse.json({ error: "Profile was just claimed by another user." }, { status: 409 });
+            }
+        } else if (!existingClaim) {
+            const { error: insertError } = await admin
+                .from("developers")
+                .insert({
+                    github_login: login,
+                    lc_username: login,
+                    github_id: github_id,
+                    name: leetcode_username,
+                    claimed: true,
+                    claimed_by: user.id,
+                    claimed_at: new Date().toISOString()
+                });
+                
+            if (insertError) {
+                return NextResponse.json({ error: "Profile was just claimed by another user." }, { status: 409 });
+            }
         }
 
         // Fetch full LC stats: easy/medium/hard, contest rating, streak
