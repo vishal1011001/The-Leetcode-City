@@ -8,6 +8,7 @@ import { MAX_TEXT_LENGTH } from "@/lib/skyAds";
 const AdPreview = dynamic(() => import("@/components/AdPreview"), { ssr: false });
 
 const ACCENT = "#ffa116";
+const SHADOW = "#b25e00";
 
 type Vehicle = "plane" | "blimp" | "billboard" | "rooftop_sign" | "led_wrap";
 type Duration = "weekly" | "monthly";
@@ -116,6 +117,7 @@ export function AdPurchaseForm() {
 
   async function handleSubmit(provider: "stripe" | "abacatepay" | "nowpayments" | "cashfree" = "cashfree") {
     if (!canSubmit) return;
+
     setLoading(true);
     setError("");
     setPixData(null);
@@ -143,7 +145,8 @@ export function AdPurchaseForm() {
         // Cashfree
         try {
           const { load } = await import("@cashfreepayments/cashfree-js");
-          const cashfreeEnv = process.env.NEXT_PUBLIC_CASHFREE_ENV === "PRODUCTION" ? "production" : "sandbox";
+          const envMode = (process.env.NEXT_PUBLIC_CASHFREE_ENV ?? "SANDBOX").replace(/['"]/g, "").trim();
+          const cashfreeEnv = envMode === "PRODUCTION" ? "production" : "sandbox";
           const cashfree = await load({ mode: cashfreeEnv as "sandbox" | "production" });
           const result = await cashfree.checkout({
             paymentSessionId: data.paymentSessionId,
@@ -166,6 +169,8 @@ export function AdPurchaseForm() {
       setLoading(false);
     }
   }
+
+
 
   const isSky = vehicle === "plane" || vehicle === "blimp";
 
@@ -418,6 +423,8 @@ export function AdPurchaseForm() {
           )}
         </div>
       </div>
+
+
     </div>
   );
 }

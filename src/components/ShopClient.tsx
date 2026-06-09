@@ -1090,6 +1090,7 @@ export default function ShopClient({
   const checkout = useCallback(
     async (itemId: string, provider: "stripe" | "nowpayments" | "abacatepay" | "cashfree" = "stripe") => {
       if (buyingItem) return;
+
       setBuyingItem(itemId);
       setBuyingProvider(provider);
       setError(null);
@@ -1126,7 +1127,8 @@ export default function ShopClient({
           // Cashfree: load SDK and open checkout
           try {
             const { load } = await import("@cashfreepayments/cashfree-js");
-            const cashfreeEnv = process.env.NEXT_PUBLIC_CASHFREE_ENV === "PRODUCTION" ? "production" : "sandbox";
+            const envMode = (process.env.NEXT_PUBLIC_CASHFREE_ENV ?? "SANDBOX").replace(/['"]/g, "").trim();
+            const cashfreeEnv = envMode === "PRODUCTION" ? "production" : "sandbox";
             const cashfree = await load({ mode: cashfreeEnv as "sandbox" | "production" });
             const result = await cashfree.checkout({
               paymentSessionId: data.paymentSessionId,
@@ -1162,6 +1164,8 @@ export default function ShopClient({
     },
     [buyingItem, items, githubLogin, devModeEnabled]
   );
+
+
 
   const handleBuyWithPoints = useCallback(
     async (itemId: string) => {
@@ -1398,6 +1402,8 @@ export default function ShopClient({
           onCompleted={handlePixCompleted}
         />
       )}
+
+
 
       {error && (
         <div className="mb-4 border-[2px] border-red-500/30 bg-red-500/10 px-3 py-2 text-[10px] text-red-400 normal-case">
