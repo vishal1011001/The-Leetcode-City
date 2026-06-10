@@ -1,8 +1,8 @@
-name: GSSoC Label Validator & Scorer
+name: GSSoC Label Validator
 
 on:
   pull_request_target:
-    types: [labeled, unlabeled, opened, synchronize]
+    types: [labeled, unlabeled, opened, synchronize, reopened]
   pull_request_review:
     types: [submitted]
 
@@ -15,31 +15,23 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  # ── Job 1: Validate label combinations & calculate score ──
   validate-labels:
-    name: GSSoC Label Audit & Score
+    name: GSSoC Label Audit
     runs-on: ubuntu-latest
-    # Skip bot-triggered label events to avoid infinite loops
+    # Skip bot-triggered label events unless it's a review submission to avoid loops
     if: >
       github.actor != 'github-actions[bot]' ||
       github.event_name == 'pull_request_review'
 
     steps:
-      - name: Validate Labels & Calculate Score
+      - name: Audit GSSoC Labels
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const { owner, repo } = context.repo;
-            let prNumber, prAuthor;
-
-            if (context.eventName === 'pull_request_review') {
-              prNumber = context.payload.pull_request.number;
-              prAuthor = context.payload.pull_request.user.login;
-            } else {
-              prNumber = context.payload.pull_request.number;
-              prAuthor = context.payload.pull_request.user.login;
-            }
+            const prNumber = context.payload.pull_request.number;
+            const prAuthor = context.payload.pull_request.user.login;
 
             // ── Fetch current labels ──
             const { data: labels } = await github.rest.issues.listLabelsOnIssue({
@@ -50,79 +42,49 @@ jobs:
             console.log(`PR #${prNumber} by @${prAuthor}`);
             console.log(`Labels: ${labelNames.join(', ')}`);
 
-            // ══════════════════════════════════════════════
-            // ── SCORING CONSTANTS (from GSSoC spec) ──
-            // ══════════════════════════════════════════════
-            const APPROVED_BASE = 50;
-            const FIRST_PR_BONUS = 25;
-            const MAX_SCORE = 175;
-
-            const DIFFICULTY = {
-              'level:beginner':     20,
-              'level:intermediate': 35,
-              'level:advanced':     55,
-              'level:critical':     80
-            };
-
-            const QUALITY = {
-              'quality:clean':       1.2,
-              'quality:exceptional': 1.5
-            };
-
-            const TYPE_BONUS = {
-              'type:bug':           10,
-              'type:feature':       10,
-              'type:docs':           5,
-              'type:testing':       10,
-              'type:refactor':      10,
-              'type:design':        10,
-              'type:accessibility': 15,
-              'type:performance':   15,
-              'type:devops':        15,
-              'type:security':      20
-            };
-
+            const DIFFICULTY_LABELS = ['level:beginner', 'level:intermediate', 'level:advanced', 'level:critical'];
+            const QUALITY_LABELS = ['quality:clean', 'quality:exceptional'];
+            const TYPE_LABELS = ['type:bug', 'type:feature', 'type:docs', 'type:testing', 'type:refactor', 'type:design', 'type:accessibility', 'type:performance', 'type:devops', 'type:security'];
             const BLOCKING_LABELS = ['gssoc:invalid', 'gssoc:spam', 'gssoc:ai-slop'];
 
-            // ══════════════════════════════════════════════
-            // ── VALIDATION CHECKS ──
-            // ══════════════════════════════════════════════
-            const warnings = [];
             const errors = [];
+            const warnings = [];
             let isBlocked = false;
 
             // 1. Check for blocking labels
             const blockingFound = labelNames.filter(l => BLOCKING_LABELS.includes(l));
             if (blockingFound.length > 0) {
               isBlocked = true;
-              errors.push(`🚫 **Blocked from scoring** — this PR has blocking label(s): \`${blockingFound.join('`, `')}\`. It will receive **0 points** regardless of other labels.`);
+              errors.push(`🚫 **Blocked from scoring/merge** — this PR has blocking label(s): \`${blockingFound.join('`, `')}\`.`);
             }
 
             // 2. Check for gssoc:approved
             const hasApproved = labelNames.includes('gssoc:approved');
             if (!hasApproved && !isBlocked) {
-              warnings.push(`⏳ **Missing \`gssoc:approved\`** — this PR will not be scored until a maintainer adds the approval label.`);
+              errors.push(`❌ **Missing \`gssoc:approved\`** — this PR is missing the approval label required to score and merge.`);
             }
 
             // 3. Check difficulty labels (exactly ONE required)
-            const diffLabels = labelNames.filter(l => Object.keys(DIFFICULTY).includes(l));
+            const diffLabels = labelNames.filter(l => DIFFICULTY_LABELS.includes(l));
             if (diffLabels.length === 0) {
-              errors.push(`❌ **No difficulty label** — every scored PR needs exactly one: \`level:beginner\`, \`level:intermediate\`, \`level:advanced\`, or \`level:critical\`.`);
+              errors.push(`❌ **Missing difficulty label** — every GSSoC PR needs exactly one: \`level:beginner\`, \`level:intermediate\`, \`level:advanced\`, or \`level:critical\`.`);
             } else if (diffLabels.length > 1) {
-              // Per spec: scoring engine picks the LOWEST (worst-case)
-              const sorted = diffLabels.sort((a, b) => DIFFICULTY[a] - DIFFICULTY[b]);
-              const lowest = sorted[0];
-              const lowestPts = DIFFICULTY[lowest];
-              warnings.push(`⚠️ **Multiple difficulty labels detected**: \`${diffLabels.join('`, `')}\`\n\n  The scoring engine **always picks the lowest** — this PR will score as \`${lowest}\` (${lowestPts} pts). If this is unintentional, remove the extra label(s).`);
+              errors.push(`❌ **Multiple difficulty labels detected**: \`${diffLabels.join('`, \` ')}\`. PR must have exactly one difficulty label.`);
             }
 
             // 4. Check quality labels (at most ONE)
-            const qualLabels = labelNames.filter(l => Object.keys(QUALITY).includes(l));
+            const qualLabels = labelNames.filter(l => QUALITY_LABELS.includes(l));
             if (qualLabels.length > 1) {
-              warnings.push(`⚠️ **Multiple quality labels detected**: \`${qualLabels.join('`, `')}\`\n\n  The scoring engine uses the **lower multiplier** (1.2×). \`quality:exceptional\` already implies clean code — use only one.`);
+              errors.push(`❌ **Multiple quality labels detected**: \`${qualLabels.join('`, \` ')}\`. PR must have at most one quality label.`);
             }
 
-            // 5. Validate quality:exceptional requires a substantive review comment
+            // 5. Check type labels (at least ONE required)
+            const typeLabels = labelNames.filter(l => TYPE_LABELS.includes(l));
+            if (typeLabels.length === 0) {
+              errors.push(`❌ **Missing type label** — every GSSoC PR needs at least one type label (e.g. \`type:bug\`, \`type:feature\`, etc.).`);
+            }
+
+            // 6. Validate quality:exceptional requires a substantive review comment
             if (qualLabels.includes('quality:exceptional')) {
               const { data: reviews } = await github.rest.pulls.listReviews({
                 owner, repo, pull_number: prNumber
@@ -135,11 +97,11 @@ jobs:
               );
 
               if (!hasSubstantiveReview) {
-                errors.push(`❌ **\`quality:exceptional\` requires justification** — a reviewer must leave an approval review comment with >30 characters explaining why this PR is exceptional. Without it, the multiplier falls back to 1.0×.`);
+                warnings.push(`⚠️ **\`quality:exceptional\` lacks justification** — a reviewer must leave an approval review comment (>30 chars) explaining why this PR is exceptional. Without it, the GSSoC scoring engine may ignore the multiplier.`);
               }
             }
 
-            // 6. Check level:critical matches the PR content
+            // 7. Check level:critical matches the PR content
             if (diffLabels.includes('level:critical')) {
               // Fetch PR files to verify it touches high-stakes areas
               const { data: files } = await github.rest.pulls.listFiles({
@@ -164,19 +126,15 @@ jobs:
               }
             }
 
-            // 7. Validate type labels match PR content
-            const typeLabels = labelNames.filter(l => Object.keys(TYPE_BONUS).includes(l));
-
+            // 8. Validate type:security matches PR content
             if (typeLabels.includes('type:security')) {
-              // Fetch files and check if security-related
               const { data: files } = await github.rest.pulls.listFiles({
                 owner, repo, pull_number: prNumber, per_page: 100
               });
               const filePaths = files.map(f => f.filename);
-              const secPatterns = [/auth/i, /security/i, /webhook/i, /middleware/i, /rate/i, /csrf/i, /xss/i, /sanitiz/i, /encrypt/i, /secret/i, /token/i, /password/i, /hash/i];
+              const secPatterns = [/auth/i, /security/i, /webhook/i, /middleware/i, /rate/i, /csrf/i, /xss/i, /sanitiz/i, /escape/i, /helmet/i, /cors/i, /rate.?limit/i, /auth/i];
               const touchesSec = filePaths.some(fp => secPatterns.some(p => p.test(fp)));
 
-              // Also check the diff for security patterns
               let diffHasSec = false;
               try {
                 const diffRes = await github.rest.pulls.get({
@@ -189,137 +147,44 @@ jobs:
               } catch(e) { /* ignore */ }
 
               if (!touchesSec && !diffHasSec) {
-                warnings.push(`⚠️ **\`type:security\` may not apply** — the changed files and diff don't appear to address a security vulnerability. This label adds +20 bonus points and should only be used when the primary purpose is security hardening.`);
+                warnings.push(`⚠️ **\`type:security\` may not apply** — the changed files and diff don't appear to address a security vulnerability. This label should only be used when the primary purpose is security hardening.`);
               }
             }
 
-            // ══════════════════════════════════════════════
-            // ── SCORE CALCULATION ──
-            // ══════════════════════════════════════════════
-            let scoreBreakdown = [];
-            let totalScore = 0;
-
-            if (isBlocked) {
-              totalScore = 0;
-              scoreBreakdown.push('🚫 Blocked — 0 pts');
-            } else if (!hasApproved) {
-              scoreBreakdown.push('⏳ Pending `gssoc:approved`');
-            } else {
-              // Base
-              totalScore += APPROVED_BASE;
-              scoreBreakdown.push(`✅ Approved base: **${APPROVED_BASE}** pts`);
-
-              // Difficulty (lowest wins)
-              if (diffLabels.length > 0) {
-                const sorted = diffLabels.sort((a, b) => DIFFICULTY[a] - DIFFICULTY[b]);
-                const usedDiff = sorted[0];
-                const diffPts = DIFFICULTY[usedDiff];
-
-                // Quality multiplier (lowest wins)
-                let qualMultiplier = 1.0;
-                let qualLabel = 'none';
-                if (qualLabels.length > 0) {
-                  const sortedQual = qualLabels.sort((a, b) => QUALITY[a] - QUALITY[b]);
-                  qualLabel = sortedQual[0];
-                  qualMultiplier = QUALITY[qualLabel];
-
-                  // quality:exceptional without review comment falls back to 1.0×
-                  if (qualLabel === 'quality:exceptional') {
-                    const { data: reviews } = await github.rest.pulls.listReviews({
-                      owner, repo, pull_number: prNumber
-                    });
-                    const hasJustification = reviews.some(r =>
-                      r.state === 'APPROVED' &&
-                      r.body && r.body.trim().length > 30 &&
-                      r.user?.login !== prAuthor
-                    );
-                    if (!hasJustification) {
-                      qualMultiplier = 1.0;
-                      qualLabel = 'none (exceptional lacks justification)';
-                    }
-                  }
-                }
-
-                const diffScore = Math.round(diffPts * qualMultiplier);
-                totalScore += diffScore;
-                if (qualMultiplier !== 1.0) {
-                  scoreBreakdown.push(`🎯 Difficulty: \`${usedDiff}\` (${diffPts}) × \`${qualLabel}\` (${qualMultiplier}×) = **${diffScore}** pts`);
-                } else {
-                  scoreBreakdown.push(`🎯 Difficulty: \`${usedDiff}\` = **${diffPts}** pts`);
-                }
-              }
-
-              // Type bonuses (cumulative)
-              if (typeLabels.length > 0) {
-                let typePts = 0;
-                const typeDetails = [];
-                for (const t of typeLabels) {
-                  typePts += TYPE_BONUS[t];
-                  typeDetails.push(`\`${t}\` (+${TYPE_BONUS[t]})`);
-                }
-                totalScore += typePts;
-                scoreBreakdown.push(`🏷️ Type bonuses: ${typeDetails.join(' + ')} = **${typePts}** pts`);
-              }
-
-              // First PR bonus check
-              try {
-                const { data: authorPRs } = await github.rest.search.issuesAndPullRequests({
-                  q: `is:pr is:merged author:${prAuthor} repo:${owner}/${repo} label:"gssoc:approved"`,
-                  per_page: 1
-                });
-                if (authorPRs.total_count === 0) {
-                  totalScore += FIRST_PR_BONUS;
-                  scoreBreakdown.push(`🎉 First PR bonus: **+${FIRST_PR_BONUS}** pts`);
-                }
-              } catch(e) {
-                console.log('Could not check first PR status:', e.message);
-              }
-
-              // Cap at 175
-              if (totalScore > MAX_SCORE) {
-                scoreBreakdown.push(`🔒 Score capped: ${totalScore} → **${MAX_SCORE}** pts (hard ceiling)`);
-                totalScore = MAX_SCORE;
-              }
-            }
-
-            // ══════════════════════════════════════════════
-            // ── BUILD REPORT COMMENT ──
-            // ══════════════════════════════════════════════
-            const COMMENT_TAG = '<!-- gssoc-score-bot -->';
+            // ── Build validation report comment ──
+            const COMMENT_TAG = '<!-- gssoc-label-audit-bot -->';
             let body = `${COMMENT_TAG}\n`;
-            body += `## 📊 GSSoC Score Report\n\n`;
+            body += `## 📋 GSSoC Label Validation Report\n\n`;
 
             if (errors.length > 0) {
-              body += `### ❌ Issues Found\n\n${errors.join('\n\n')}\n\n`;
+              body += `### ❌ Issues Found\n\n`;
+              body += errors.map(e => `- ${e}`).join('\n') + `\n\n`;
             }
             if (warnings.length > 0) {
-              body += `### ⚠️ Warnings\n\n${warnings.join('\n\n')}\n\n`;
+              body += `### ⚠️ Warnings\n\n`;
+              body += warnings.map(w => `- ${w}`).join('\n') + `\n\n`;
             }
+
             if (errors.length === 0 && warnings.length === 0) {
-              body += `### ✅ All Label Checks Passed\n\n`;
-            }
-
-            body += `### 🧮 Score Breakdown\n\n`;
-            body += scoreBreakdown.map(s => `- ${s}`).join('\n');
-            body += `\n\n`;
-
-            if (!isBlocked && hasApproved) {
-              body += `### 🏆 Estimated Score: **${totalScore}** / ${MAX_SCORE} pts\n\n`;
+              body += `✅ **All label requirements met.** This PR passes the pre-merge label check.\n\n`;
+            } else if (errors.length === 0) {
+              body += `ℹ️ **Required labels present.** Only minor warnings found. This PR is ready for merge.\n\n`;
+            } else {
+              body += `🛑 **Please fix the errors listed above before merging.**\n\n`;
             }
 
             body += `---\n`;
             body += `<details><summary>📖 Label Reference</summary>\n\n`;
-            body += `| Category | Labels | Points |\n`;
-            body += `|----------|--------|--------|\n`;
-            body += `| Difficulty | \`level:beginner\` / \`intermediate\` / \`advanced\` / \`critical\` | 20 / 35 / 55 / 80 |\n`;
-            body += `| Quality | \`quality:clean\` / \`quality:exceptional\` | ×1.2 / ×1.5 |\n`;
-            body += `| Type | \`type:bug\` \`feature\` \`docs\` \`testing\` \`refactor\` \`design\` | +10 / +10 / +5 / +10 / +10 / +10 |\n`;
-            body += `| Type | \`type:accessibility\` \`performance\` \`devops\` \`security\` | +15 / +15 / +15 / +20 |\n`;
-            body += `| Blocking | \`gssoc:invalid\` \`gssoc:spam\` \`gssoc:ai-slop\` | 0 pts |\n`;
-            body += `| Formula | \`50 + (difficulty × quality) + type_bonuses\` | max 175 |\n\n`;
+            body += `| Category | Valid Labels | Rules |\n`;
+            body += `|----------|--------------|-------|\n`;
+            body += `| **Approval** | \`gssoc:approved\` | Required to score and merge |\n`;
+            body += `| **Difficulty** | \`level:beginner\` / \`intermediate\` / \`advanced\` / \`critical\` | Exactly one is required |\n`;
+            body += `| **Quality** | \`quality:clean\` / \`quality:exceptional\` | Optional (max one); exceptional requires reviewer comment |\n`;
+            body += `| **Type** | \`type:bug\`, \`type:feature\`, \`type:docs\`, \`type:testing\`, \`type:refactor\`, \`type:design\`, \`type:accessibility\`, \`type:performance\`, \`type:devops\`, \`type:security\` | At least one is required |\n`;
+            body += `| **Blocking** | \`gssoc:invalid\`, \`gssoc:spam\`, \`gssoc:ai-slop\` | Excludes PR from scoring and blocks merge |\n\n`;
             body += `</details>\n`;
 
-            // ── Update or create the score comment ──
+            // ── Update or create the comment ──
             const { data: comments } = await github.rest.issues.listComments({
               owner, repo, issue_number: prNumber, per_page: 100
             });
@@ -333,72 +198,15 @@ jobs:
               await github.rest.issues.updateComment({
                 owner, repo, comment_id: existingComment.id, body
               });
-              console.log(`Updated score comment on PR #${prNumber}`);
+              console.log(`Updated label validation comment on PR #${prNumber}`);
             } else {
               await github.rest.issues.createComment({
                 owner, repo, issue_number: prNumber, body
               });
-              console.log(`Created score comment on PR #${prNumber}`);
+              console.log(`Created label validation comment on PR #${prNumber}`);
             }
 
-            // ── Set check status ──
+            // ── Fail check run if errors exist ──
             if (errors.length > 0) {
-              core.setFailed(`GSSoC label issues found: ${errors.length} error(s)`);
+              core.setFailed(`GSSoC label check failed: ${errors.length} error(s) found.`);
             }
-
-  # ── Job 2: Pre-merge label sanity gate ──
-  pre-merge-gate:
-    name: Pre-Merge Label Gate
-    runs-on: ubuntu-latest
-    if: >
-      github.event_name == 'pull_request_target' &&
-      (github.event.action == 'labeled' || github.event.action == 'unlabeled')
-
-    steps:
-      - name: Enforce label rules before merge
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const { owner, repo } = context.repo;
-            const prNumber = context.payload.pull_request.number;
-
-            const { data: labels } = await github.rest.issues.listLabelsOnIssue({
-              owner, repo, issue_number: prNumber
-            });
-            const labelNames = labels.map(l => l.name);
-
-            const DIFFICULTY_LABELS = ['level:beginner', 'level:intermediate', 'level:advanced', 'level:critical'];
-            const BLOCKING_LABELS = ['gssoc:invalid', 'gssoc:spam', 'gssoc:ai-slop'];
-            const CATEGORY_LABELS = ['frontend', 'backend'];
-
-            // Check for blocking labels
-            const blocked = labelNames.filter(l => BLOCKING_LABELS.includes(l));
-            if (blocked.length > 0) {
-              console.log(`PR has blocking label(s): ${blocked.join(', ')}. Merge should be prevented.`);
-              core.setFailed(`PR #${prNumber} has blocking label(s): ${blocked.join(', ')}. Cannot merge.`);
-              return;
-            }
-
-            // Require exactly one difficulty label
-            const diffs = labelNames.filter(l => DIFFICULTY_LABELS.includes(l));
-            if (diffs.length === 0) {
-              core.setFailed(`PR #${prNumber} is missing a difficulty label. Add one of: ${DIFFICULTY_LABELS.join(', ')}`);
-              return;
-            }
-
-            // Require gssoc:approved
-            if (!labelNames.includes('gssoc:approved')) {
-              core.setFailed(`PR #${prNumber} is missing the gssoc:approved label.`);
-              return;
-            }
-
-            // Require at least one type label
-            const TYPE_LABELS = ['type:bug', 'type:feature', 'type:docs', 'type:testing', 'type:refactor', 'type:design', 'type:accessibility', 'type:performance', 'type:devops', 'type:security'];
-            const types = labelNames.filter(l => TYPE_LABELS.includes(l));
-            if (types.length === 0) {
-              core.setFailed(`PR #${prNumber} is missing a type label. Add at least one of: ${TYPE_LABELS.join(', ')}`);
-              return;
-            }
-
-            console.log(`PR #${prNumber} passes all label gates. Ready for merge.`);
