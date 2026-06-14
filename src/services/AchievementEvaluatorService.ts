@@ -1,5 +1,5 @@
 // ✅ Correct Path Import Alias specified by the project guidelines
-import { supabase } from "@/lib/supabase";
+import { supabase } from '@/src/config/supabaseClient';
 
 export class AchievementEvaluatorService {
   /**
