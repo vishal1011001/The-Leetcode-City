@@ -123,12 +123,13 @@ export async function POST(_request: Request) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
 
-  // Early rate limit: coarse guard against extreme spam (e.g. scripted floods).
-  // Allows 3 requests per 30s so transient failures don't block retries, but
-  // still caps abuse. A tighter idempotency check fires after the RPC succeeds.
-  const { ok: earlyOk } = await rateLimit(`checkin:${user.id}`, 3, 30_000);
-  if (!earlyOk) {
-    return NextResponse.json({ error: "Too many requests" }, { status: 429 });
+  // Sliding-window rate limiter to prevent more than one check-in request per developer account per 24 hours
+  const { ok: dailyOk } = await rateLimit(`checkin:daily:${user.id}`, 1, 24 * 60 * 60 * 1000);
+  if (!dailyOk) {
+    return NextResponse.json(
+      { error: "Only one check-in request allowed per 24 hours" },
+      { status: 429 }
+    );
   }
 
   const sb = getSupabaseAdmin();
