@@ -2221,8 +2221,8 @@ export default function CityCanvas({
   multiplayerPlayers,
 }: Props) {
   const { isRaining } = useWeather();
-  const [dungeonOpen, setDungeonOpen] = useState(false);
   const router = useRouter();
+  const [dungeonOpen, setDungeonOpen] = useState(false);
   const t = THEMES[themeIndex] ?? THEMES[0];
   const showPerf = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("perf");
   const flyPosRef = useRef(new THREE.Vector3());
