@@ -119,6 +119,7 @@ const FounderMessage = dynamic(() => import("@/components/FounderMessage"), { ss
 const EArcadeCard = dynamic(() => import("@/components/EArcadeCard"), { ssr: false });
 const ZenCodingModal = dynamic(() => import("@/components/ZenCodingModal"), { ssr: false });
 const CodeForgeModal = dynamic(() => import("@/components/CodeForgeModal"), { ssr: false });
+const SolanaModal = dynamic(() => import("@/components/SolanaModal"), { ssr: false });
 const RabbitCompletion = dynamic(() => import("@/components/RabbitCompletion"), { ssr: false });
 const DistrictChooser = dynamic(() => import("@/components/DistrictChooser"), { ssr: false });
 const MiniMap = dynamic(() => import("@/components/MiniMap"), { ssr: false });
@@ -601,7 +602,7 @@ function HomeContent() {
   const [relics, setRelics] = useState<Relic[]>(STATIC_RELICS);
   const [equippedRelicId, setEquippedRelicId] = useState<string | null>(null);
   const [relicFocus, setRelicFocus] = useState<{ x: number; y: number; z: number } | null>(null);
-  
+
   // New World travel cinematic states
   const [showNewWorldPrompt, setShowNewWorldPrompt] = useState(false);
   const [newWorldCinematicActive, setNewWorldCinematicActive] = useState(false);
@@ -782,6 +783,7 @@ function HomeContent() {
   const [eArcadeOpen, setEArcadeOpen] = useState(false);
   const [zenCodingOpen, setZenCodingOpen] = useState(false);
   const [codeForgeOpen, setCodeForgeOpen] = useState(false);
+  const [solanaOpen, setSolanaOpen] = useState(false);
   const [arcadeOnline, setArcadeOnline] = useState<number>(0);
   const [districtChooserOpen, setDistrictChooserOpen] = useState(false);
   const [rabbitCinematic, setRabbitCinematic] = useState(false);
@@ -2620,7 +2622,7 @@ function HomeContent() {
     if (!selectedBuilding) return;
     setRefreshingStats(true);
     try {
-       const res = await fetch(
+      const res = await fetch(
         `/api/dev/${encodeURIComponent(selectedBuilding.login)}?refresh=true&t=${Date.now()}`,
         { cache: "no-store" },
       );
@@ -3084,6 +3086,9 @@ function HomeContent() {
         onCodeForgeClick={() => {
           setCodeForgeOpen(true);
           setSelectedBuilding(null);
+        }}
+        onSolanaClick={() => {
+          setSolanaOpen(true);
         }}
         rabbitSighting={rabbitSighting}
         onRabbitCaught={onRabbitCaught}
@@ -6300,11 +6305,38 @@ function HomeContent() {
                 borderColor: t.done ? theme.accent : undefined,
               }}
             >
-              <span style={{ color: theme.accent }}>
-                {t.done ? "\u2713" : "\u2606"}
-              </span>{" "}
-              {t.title}
-              {t.done ? " \u2014 Complete!" : ""}
+              {t.reward ? (
+                <>
+                  <div
+                    className="font-semibold"
+                    style={{ color: theme.accent }}
+                  >
+                    🎉 Daily Rewards Claimed!
+                  </div>
+
+                  <div className="mt-1 text-[10px] text-cream">
+                    +{t.reward.xp} XP
+                  </div>
+
+                  <div className="text-[10px] text-cream">
+                    +{t.reward.points} Shop Points
+                  </div>
+
+                  {t.reward.freeze && (
+                    <div className="text-[10px] text-cream">
+                      🧊 Streak Freeze Earned!
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <span style={{ color: theme.accent }}>
+                    {t.done ? "✓" : "☆"}
+                  </span>{" "}
+                  {t.title}
+                  {t.done ? " — Complete!" : ""}
+                </>
+              )}
             </div>
           ))}
           <style jsx>{`
@@ -6804,7 +6836,9 @@ function HomeContent() {
       {codeForgeOpen && (
         <CodeForgeModal onClose={() => setCodeForgeOpen(false)} />
       )}
-
+      {solanaOpen && (
+        <SolanaModal onClose={() => setSolanaOpen(false)} />
+      )}
       {/* Rabbit Quest Cinematic Overlay */}
       {rabbitCinematic && (
         <div className="fixed inset-0 z-50 pointer-events-none">
@@ -7091,7 +7125,7 @@ export default function Home() {
       <div className="h-screen w-screen bg-black flex items-center justify-center">
         <div className="text-red-500 font-pixel text-center px-4">
           Something went wrong loading the city.
-          <button 
+          <button
             onClick={() => window.location.reload()}
             className="block mx-auto mt-4 px-4 py-2 bg-[#ffa116] text-black font-pixel text-sm"
           >
