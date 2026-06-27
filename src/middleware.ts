@@ -159,15 +159,23 @@ export async function middleware(request: NextRequest) {
   supabaseResponse.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
   supabaseResponse.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
 
-  // Three.js/WebGL requires 'unsafe-eval' for shader compilation.
-  // Cashfree SDK and Vercel telemetry scripts are the only trusted external origins.
+  // CSP notes:
+  // - Three.js/WebGL requires 'unsafe-eval' for shader compilation.
+  // - 'unsafe-inline' in script-src is required for Next.js hydration/inline
+  //   bootstrap scripts (e.g. __NEXT_DATA__) since we don't use a nonce scheme.
+  // - 'unsafe-inline' in style-src is required for React inline styles, CSS-in-JS,
+  //   and Next.js injected styles; falling back to default-src would break layout.
+  // - External origins: Cashfree SDK, Vercel telemetry, Himetrica analytics
+  //   (script + beacons), Google Fonts (stylesheet + font files), and the
+  //   alfa-leetcode API used by the dungeon daily challenge.
   const csp = [
     "default-src 'self'",
-    "script-src 'self' 'unsafe-eval' https://sdk.cashfree.com https://va.vercel-scripts.com",
-    "connect-src 'self' wss://*.supabase.co https://*.supabase.co https://*.upstash.io https://leetcode.com https://codeforces.com",
+    "script-src 'self' 'unsafe-eval' 'unsafe-inline' https://sdk.cashfree.com https://va.vercel-scripts.com https://cdn.himetrica.com",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "connect-src 'self' wss://*.supabase.co https://*.supabase.co https://*.upstash.io https://leetcode.com https://codeforces.com https://alfa-leetcode-api.onrender.com https://*.himetrica.com",
     "img-src 'self' data: blob: https://assets.leetcode.com https://avatars.githubusercontent.com",
     "media-src 'self'",
-    "font-src 'self'",
+    "font-src 'self' https://fonts.gstatic.com",
     "frame-src 'none'",
     "object-src 'none'",
     "base-uri 'self'",
