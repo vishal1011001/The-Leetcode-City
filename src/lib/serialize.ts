@@ -1,5 +1,5 @@
-export function serializeDeveloper(dev: Record<string, any>): Record<string, any> {
-  const result: Record<string, any> = {};
+export function serializeDeveloper(dev: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
 
   // Keep these vital fields as-is
   const alwaysKeep = ["id", "github_login", "contributions", "total_stars", "public_repos"];
