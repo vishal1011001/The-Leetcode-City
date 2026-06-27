@@ -1,6 +1,7 @@
 "use client";
 /* eslint-disable @typescript-eslint/no-explicit-any, react-hooks/refs, react-hooks/immutability */
 import { useRef, useEffect, useState, useMemo, lazy, Suspense } from "react";
+import { useRouter } from "next/navigation";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls, useGLTF, Stats } from "@react-three/drei";
 import * as THREE from "three";
@@ -17,6 +18,8 @@ import type { RaidExecuteResponse } from "@/lib/raid";
 import FounderSpire from "./FounderSpire";
 import LeaderboardHolograms from "./LeaderboardHolograms";
 import EArcadeLandmark from "./EArcadeLandmark";
+import DailyQuestionsLandmark from "./DailyQuestionsLandmark";
+import DungeonModal from "./DungeonModal";
 
 const Colosseum = lazy(() => import("./Colosseum"));
 const VoidObelisk = lazy(() => import("./VoidObelisk"));
@@ -2125,6 +2128,7 @@ interface Props {
   onEArcadeClick?: () => void;
   onSkyTempleClick?: () => void;
   onCodeForgeClick?: () => void;
+  onSolanaClick?: () => void;
   multiplayerPlayers?: Map<string, CityPlayer>;
 }
 
@@ -2191,6 +2195,7 @@ export default function CityCanvas({
   onEArcadeClick,
   onSkyTempleClick,
   onCodeForgeClick,
+  onSolanaClick,
   rabbitSighting,
   onRabbitCaught,
   rabbitCinematic,
@@ -2218,6 +2223,8 @@ export default function CityCanvas({
   multiplayerPlayers,
 }: Props) {
   const { isRaining } = useWeather();
+  const router = useRouter();
+  const [dungeonOpen, setDungeonOpen] = useState(false);
   const t = THEMES[themeIndex] ?? THEMES[0];
   const showPerf = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("perf");
   const flyPosRef = useRef(new THREE.Vector3());
@@ -2231,7 +2238,9 @@ export default function CityCanvas({
     }
     return max;
   }, [buildings]);
-
+  const handleChronoTowerClick = () => {
+    router.push("/roadmap");
+  };
   const landmarkPositions = useMemo(() => {
     const radius = 380;
     const count = 14;
@@ -2278,6 +2287,7 @@ export default function CityCanvas({
     return () => clearTimeout(timer);
   }, [visibleBuildings.length, buildings]);
   return (
+    <>
     <Canvas
       camera={{ position: [400, 450, 600], fov: 55, near: 1.0, far: 4000 }}
       dpr={[1, 2]}
@@ -2412,7 +2422,7 @@ export default function CityCanvas({
               themeFace={t.building.face}
             />
             <VoidObelisk onClick={() => { }} position={landmarkPositions[1]} />
-            <DungeonPortal onClick={() => { }} position={landmarkPositions[2]} />
+            <DungeonPortal onClick={() => setDungeonOpen(true)} position={landmarkPositions[2]} />
             <AstralObservatory onClick={() => { }} position={landmarkPositions[3]} />
             <CryptOfEchoes onClick={() => { }} position={landmarkPositions[4]} />
             <SunkenSanctum onClick={() => { }} position={landmarkPositions[5]} />
@@ -2425,11 +2435,22 @@ export default function CityCanvas({
             themeFace={t.building.face}
             position={landmarkPositions[7]}
           />
+          <DailyQuestionsLandmark
+             onClick={() => {}}
+             themeAccent={t.building.accent}
+             themeWindowLit={t.building.windowLit}
+             themeFace={t.building.face}
+             position={[373, 0, -75]}
+          />
+          
           <Suspense fallback={null}>
-            <ChronoTower onClick={() => { }} position={landmarkPositions[8]} />
+            <ChronoTower
+              onClick={handleChronoTowerClick}
+              position={landmarkPositions[8]}
+            />
             <SkyTemple onClick={onSkyTempleClick ?? (() => { })} position={landmarkPositions[9]} />
             <FirecrawlBuilding onClick={() => { }} position={landmarkPositions[10]} />
-            <SolanaBuilding onClick={() => { }} position={landmarkPositions[11]} />
+            <SolanaBuilding onClick={onSolanaClick ?? (() => {})} position={landmarkPositions[11]} />
             <CyberStation onClick={() => { }} position={landmarkPositions[12]} />
             <DeveloperPalace onClick={() => { }} position={landmarkPositions[13]} />
           </Suspense>
@@ -2498,5 +2519,9 @@ export default function CityCanvas({
       )}
 
     </Canvas>
+    {dungeonOpen && (
+      <DungeonModal onClose={() => setDungeonOpen(false)} />
+    )}
+  </>
   );
 }
