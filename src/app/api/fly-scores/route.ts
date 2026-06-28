@@ -37,7 +37,7 @@ interface FlyScoreQueryRow {
     id: number;
     github_login: string;
     avatar_url: string;
-  };
+  }[];
 }
 
 export async function POST(request: Request) {
@@ -211,7 +211,8 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Failed to fetch" }, { status: 500 });
   }
 
-  // Transform the data to flatten developer fields: developers is a to-one embed object
+  // Transform the data to flatten developer fields. Supabase types this
+  // to-one embed as a single-element array, so we index into it.
   // Map each fly_score row to include developer github_login and avatar_url at top level
   const transformedData = (data ?? []).map((row: FlyScoreQueryRow) => ({
     score: row.score,
@@ -221,8 +222,8 @@ export async function GET(request: Request) {
     created_at: row.created_at,
     developer_id: row.developer_id,
     // Flatten developer object fields to top level
-    github_login: row.developers?.github_login,
-    avatar_url: row.developers?.avatar_url,
+    github_login: row.developers?.[0]?.github_login,
+    avatar_url: row.developers?.[0]?.avatar_url,
   }));
 
   // buildFlyLeaderboard dedupes per developer, takes the top 20, and resolves login/avatar.
