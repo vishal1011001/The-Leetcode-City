@@ -26,7 +26,7 @@ interface FlyScoreDev {
   developer_id: number;
 }
 
-interface FlyScoreRow {
+interface FlyScoreQueryRow {
   score: number;
   collected: number;
   max_combo: number;
@@ -213,7 +213,7 @@ export async function GET(request: Request) {
 
   // Transform the data to flatten developer fields: developers is a to-one embed object
   // Map each fly_score row to include developer github_login and avatar_url at top level
-  const transformedData = (data ?? []).map((row: FlyScoreRow) => ({
+  const transformedData = (data ?? []).map((row: FlyScoreQueryRow) => ({
     score: row.score,
     collected: row.collected,
     max_combo: row.max_combo,
