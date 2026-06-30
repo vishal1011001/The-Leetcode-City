@@ -1235,6 +1235,8 @@ export default function AtmosphereCycleManager({
     }
 
     if (active) {
+      if (typeof window === "undefined") return;
+
       const now = new Date();
 
       const hours =
