@@ -11,6 +11,25 @@ import { trackDailyMission } from "@/lib/dailies";
 import { fetchLeetCodeWeeklySubmissions } from "@/lib/leetcode";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+type Developer = {
+  id: number;
+  github_login: string;
+  claimed: boolean;
+  contributions: number;
+  public_repos: number;
+  total_stars: number;
+  kudos_count: number;
+  app_streak: number;
+  streak_freeze_30d_claimed: boolean;
+  last_checkin_date: string | null;
+  easy_solved?: number;
+  medium_solved?: number;
+  hard_solved?: number;
+  contest_rating?: number;
+  lc_streak?: number;
+  total_prs?: number;
+};
+ 
 // A12: Streak reward milestones — {milestone: days, pool: item_ids to pick from}
 const STREAK_MILESTONES = [
   { milestone: 3, pool: ["flag"] },
@@ -46,9 +65,10 @@ async function grantStreakReward(
     const ownedSet = new Set((ownedRows ?? []).map((r: { item_id: string }) => r.item_id));
 
     const unowned = tier.pool.filter((id) => !ownedSet.has(id));
-    const itemId = unowned.length > 0
-      ? unowned[Math.floor(Math.random() * unowned.length)]
-      : tier.pool[Math.floor(Math.random() * tier.pool.length)]; // fallback: grant anyway
+    const itemId =
+      unowned.length > 0
+        ? unowned[Math.floor(Math.random() * unowned.length)]
+        : tier.pool[Math.floor(Math.random() * tier.pool.length)]; // fallback: grant anyway
 
     // Record the reward first — upsert guards against concurrent duplicate grants.
     // If another request already inserted this milestone, do nothing and skip.
@@ -56,7 +76,7 @@ async function grantStreakReward(
       .from("streak_rewards")
       .upsert(
         { developer_id: developerId, milestone: tier.milestone, item_id: itemId },
-        { onConflict: "developer_id,milestone", ignoreDuplicates: true }
+        { onConflict: "developer_id,milestone", ignoreDuplicates: true },
       )
       .select("id")
       .maybeSingle();
@@ -65,15 +85,18 @@ async function grantStreakReward(
     if (!rewardInserted) continue;
 
     // Grant the item
-    await sb.from("purchases").upsert({
-      developer_id: developerId,
-      item_id: itemId,
-      provider: "free",
-      provider_tx_id: `streak_reward_${tier.milestone}_${developerId}`,
-      amount_cents: 0,
-      currency: "usd",
-      status: "completed",
-    }, { onConflict: "provider_tx_id", ignoreDuplicates: true });
+    await sb.from("purchases").upsert(
+      {
+        developer_id: developerId,
+        item_id: itemId,
+        provider: "free",
+        provider_tx_id: `streak_reward_${tier.milestone}_${developerId}`,
+        amount_cents: 0,
+        currency: "usd",
+        status: "completed",
+      },
+      { onConflict: "provider_tx_id", ignoreDuplicates: true },
+    );
 
     return {
       milestone: tier.milestone,
@@ -90,7 +113,7 @@ async function fetchWeeklyContributions(login: string): Promise<number | null> {
   return fetchLeetCodeWeeklySubmissions(login);
 }
 
-export async function POST(request: Request) {
+export async function POST() {
   const supabase = await createServerSupabase();
   const {
     data: { user },
@@ -100,25 +123,57 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
 
-  // Per-user rate limit: 1 req/5s
-  const { ok } = rateLimit(`checkin:${user.id}`, 1, 5000);
-  if (!ok) {
-    return NextResponse.json({ error: "Too fast" }, { status: 429 });
+  // Early rate limit: coarse guard against extreme spam (e.g. scripted floods).
+  // Allows 3 requests per 30s so transient failures don't block retries, but
+  // still caps abuse. A tighter idempotency check fires after the RPC succeeds.
+  const { ok: earlyOk } = await rateLimit(`checkin:${user.id}`, 3, 30_000);
+  if (!earlyOk) {
+    return NextResponse.json({ error: "Too many requests" }, { status: 429 });
   }
 
   const sb = getSupabaseAdmin();
 
   // Fetch developer (must be claimed)
-  const { data: dev } = await sb
+  const { data: devData } = await sb
     .from("developers")
-    .select("id, github_login, claimed, contributions, public_repos, total_stars, kudos_count, app_streak, streak_freeze_30d_claimed, last_checkin_date")
+    .select(
+      "id, github_login, claimed, contributions, public_repos, total_stars, kudos_count, app_streak, streak_freeze_30d_claimed, last_checkin_date",
+    )
     .eq("claimed_by", user.id)
     .single();
 
+  let dev: Developer | null = devData;
+
+  try {
+    const { data: v2Data, error: v2Err } = await sb
+      .from("developers")
+      .select("easy_solved, medium_solved, hard_solved, contest_rating, lc_streak, total_prs")
+      .eq("claimed_by", user.id)
+      .maybeSingle();
+    if (!v2Err && dev && v2Data) {
+      dev = { ...dev, ...v2Data };
+    }
+  } catch {
+    // Ignore schema errors if migration hasn't run yet
+  }
+
   const githubLogin = dev?.github_login ?? "";
 
-  if (!dev || !dev.claimed) {
-    return NextResponse.json({ error: "Must claim building first" }, { status: 403 });
+  if (!dev) {
+    return NextResponse.json(
+      {
+        error:
+          "Your LeetCode stats are still being synced. Please check back in a few minutes!",
+      },
+      { status: 403 }
+    );
+  }
+
+  if (!dev.claimed) {
+    return NextResponse.json(
+      { error: "Must claim building first" },
+      { status: 403 }
+    );
   }
 
   // Perform check-in via RPC
@@ -144,6 +199,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: checkinResult.error }, { status: 400 });
   }
 
+  // Tight idempotency guard: only consume a token when the check-in actually
+  // succeeded (checked_in = true). This ensures that transient DB/LeetCode
+  // failures earlier in the handler never burn the user's daily slot.
+  // Window: 1 token per 10s — prevents double-submits from double-clicks
+  // while still allowing a quick retry after a real failure.
+  if (checkinResult.checked_in) {
+    const { ok: successOk } = await rateLimit(`checkin:success:${user.id}`, 1, 10_000);
+    if (!successOk) {
+      // Already processed a successful check-in within the last 10s — deduplicate.
+      return NextResponse.json({ error: "Check-in already processed" }, { status: 429 });
+    }
+  }
+
   // Track activity
   await touchLastActive(dev.id);
   await trackDailyMission(dev.id, "checkin");
@@ -164,10 +232,31 @@ export async function POST(request: Request) {
   let streakReward: { milestone: number; item_id: string; item_name: string } | null = null;
   let xpResult: { granted: number; new_total: number; new_level: number } | null = null;
 
-  // Grant XP for check-in
+  const today = new Date().toISOString().split("T")[0];
+
+  // Grant XP for check-in — idempotent via unique (developer_id, source, date) insert.
+  // If two cold instances both reach here, only the first INSERT wins; the second
+  // sees a 23505 conflict and skips the grant entirely.
   if (checkinResult.checked_in) {
-    const { data: xpData } = await sb.rpc("grant_xp", { p_developer_id: dev.id, p_source: "checkin", p_amount: 10 });
-    if (xpData) xpResult = xpData as { granted: number; new_total: number; new_level: number };
+    const { error: xpLogError } = await sb
+      .from("checkin_xp_log")
+      .insert({ developer_id: dev.id, granted_date: today })
+      .select("id")
+      .maybeSingle();
+
+    if (!xpLogError) {
+      // Insert succeeded — we are the first instance, safe to grant XP
+      const { data: xpData } = await sb.rpc("grant_xp_atomic", {
+        p_developer_id: dev.id,
+        p_source: "checkin",
+        p_amount: 10,
+      });
+      if (xpData) xpResult = xpData as { granted: number; new_total: number; new_level: number };
+    } else if (!xpLogError.code?.includes("23505")) {
+      // Unexpected error (not a duplicate) — log but don't crash
+      console.error("[checkin] checkin_xp_log insert error:", xpLogError);
+    }
+    // 23505 = duplicate, another instance already granted XP today — skip silently
   }
 
   if (checkinResult.checked_in) {
@@ -176,28 +265,35 @@ export async function POST(request: Request) {
     const giftsSent = 0;
     const giftsReceived = 0;
 
-    newAchievements = await checkAchievements(dev.id, {
-      contributions: dev.contributions,
-      public_repos: dev.public_repos,
-      total_stars: dev.total_stars,
-      referral_count: referralCount,
-      kudos_count: dev.kudos_count ?? 0,
-      gifts_sent: giftsSent,
-      gifts_received: giftsReceived,
-      app_streak: checkinResult.streak,
-    }, githubLogin);
+    newAchievements = await checkAchievements(
+      dev.id,
+      {
+        contributions: dev.contributions,
+        public_repos: dev.public_repos,
+        total_stars: dev.total_stars,
+        referral_count: referralCount,
+        kudos_count: dev.kudos_count ?? 0,
+        gifts_sent: giftsSent,
+        gifts_received: giftsReceived,
+        app_streak: checkinResult.streak,
+        easy_solved: dev.easy_solved ?? 0,
+        medium_solved: dev.medium_solved ?? 0,
+        hard_solved: dev.hard_solved ?? 0,
+        contest_rating: dev.contest_rating ?? 0,
+        lc_streak: dev.lc_streak ?? 0,
+        total_prs: dev.total_prs ?? 0,
+      },
+      githubLogin,
+    );
 
     // Grant 1 free freeze at 30-day streak milestone
     if (checkinResult.streak >= 30 && !dev.streak_freeze_30d_claimed) {
       await sb.rpc("grant_streak_freeze", { p_developer_id: dev.id });
-      await sb
-        .from("developers")
-        .update({ streak_freeze_30d_claimed: true })
-        .eq("id", dev.id);
-      await sb.from("streak_freeze_log").insert({
-        developer_id: dev.id,
-        action: "granted_milestone",
-      });
+      await sb.from("developers").update({ streak_freeze_30d_claimed: true }).eq("id", dev.id);
+      await sb.from("streak_freeze_log").upsert(
+        { developer_id: dev.id, action: "granted_milestone", granted_date: today },
+        { onConflict: "developer_id,action,granted_date", ignoreDuplicates: true },
+      );
     }
 
     // A12: Streak rewards - grant free items at milestones
@@ -214,25 +310,29 @@ export async function POST(request: Request) {
       );
     }
 
-    // Insert feed event
-    await sb.from("activity_feed").insert({
-      event_type: "streak_checkin",
-      actor_id: dev.id,
-      metadata: {
-        login: githubLogin,
-        streak: checkinResult.streak,
-        was_frozen: checkinResult.was_frozen ?? false,
-        reward: streakReward?.item_id ?? null,
+    // Upsert feed event — unique on (actor_id, event_type, event_date) so concurrent
+    // instances produce exactly one row rather than two.
+    const eventDate = new Date().toISOString().split("T")[0];
+    await sb.from("activity_feed").upsert(
+      {
+        event_type: "streak_checkin",
+        actor_id: dev.id,
+        event_date: eventDate,
+        metadata: {
+          login: githubLogin,
+          streak: checkinResult.streak,
+          was_frozen: checkinResult.was_frozen ?? false,
+          reward: streakReward?.item_id ?? null,
+        },
       },
-    });
+      { onConflict: "actor_id,event_type,event_date", ignoreDuplicates: true },
+    );
   }
 
   // Refresh weekly contributions from LeetCode
   const weeklyContribs = await fetchWeeklyContributions(githubLogin);
   if (weeklyContribs !== null) {
-    await sb.from("developers")
-      .update({ current_week_contributions: weeklyContribs })
-      .eq("id", dev.id);
+    await sb.from("developers").update({ current_week_contributions: weeklyContribs }).eq("id", dev.id);
   }
 
   // Count unseen achievements
@@ -256,20 +356,24 @@ export async function POST(request: Request) {
     const lastCheckin = dev.last_checkin_date as string | null;
     const { data: recentRaids } = await sb
       .from("raids")
-      .select("attacker_id, success, created_at, attacker:developers!raids_attacker_id_fkey(github_login)")
+      .select(
+        "attacker_id, success, created_at, attacker:developers!raids_attacker_id_fkey(github_login)",
+      )
       .eq("defender_id", dev.id)
       .gt("created_at", lastCheckin ?? "1970-01-01")
       .order("created_at", { ascending: false })
       .limit(5);
 
     raidsSinceLast = (recentRaids ?? []).map((r) => ({
-      attacker_login: (r.attacker as unknown as { github_login: string })?.github_login ?? "unknown",
+      attacker_login:
+        (r.attacker as unknown as { github_login: string })?.github_login ?? "unknown",
       success: r.success,
       created_at: r.created_at,
     }));
   } catch (err) {
     console.warn("[app/api/checkin/route.ts] non-critical error:", err);
   }
+
   return NextResponse.json({
     checked_in: checkinResult.checked_in,
     already_today: checkinResult.already_today ?? false,

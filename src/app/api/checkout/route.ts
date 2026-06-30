@@ -4,7 +4,10 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { createCheckoutSession } from "@/lib/stripe";
 import { createPixQrCode } from "@/lib/abacatepay";
 import { createCryptoInvoice } from "@/lib/nowpayments";
+import { createCashfreeCheckout } from "@/lib/cashfree";
 import { rateLimit } from "@/lib/rate-limit";
+
+import { fulfillItemPurchase, autoEquipIfSolo } from "@/lib/items";
 
 // Defense-in-depth: per-user rate limit IN ADDITION to the IP-based
 // middleware rate limit.  This one is keyed by Supabase user ID so it
@@ -26,7 +29,7 @@ export async function POST(request: Request) {
   }
 
   // Rate limit: 1 checkout per 10 seconds per user
-  const { ok } = rateLimit(`checkout:${user.id}`, 1, 10_000);
+  const { ok } = await rateLimit(`checkout:${user.id}`, 1, 10_000);
   if (!ok) {
     return NextResponse.json({ error: "Too fast. Wait a few seconds." }, { status: 429 });
   }
@@ -58,14 +61,20 @@ export async function POST(request: Request) {
   }
 
   // Parse body
-  let body: { item_id: string; provider: "stripe" | "abacatepay" | "nowpayments"; gifted_to_login?: string };
+  let body: {
+    item_id: string;
+    provider: "stripe" | "abacatepay" | "nowpayments" | "cashfree";
+    gifted_to_login?: string;
+    dev_mode?: boolean;
+    phone?: string;
+  };
   try {
     body = await request.json();
   } catch (err) { console.warn("[app/api/checkout/route.ts] error:", err); return NextResponse.json({ error: "Invalid body" }, { status: 400 });
    }
-  const { item_id, provider, gifted_to_login } = body;
+  const { item_id, provider, gifted_to_login, dev_mode, phone } = body;
 
-  if (!item_id || !provider || !["stripe", "abacatepay", "nowpayments"].includes(provider)) {
+  if (!item_id || !provider || !["stripe", "abacatepay", "nowpayments", "cashfree"].includes(provider)) {
     return NextResponse.json({ error: "Invalid item_id or provider" }, { status: 400 });
   }
 
@@ -87,7 +96,7 @@ export async function POST(request: Request) {
     const { data: receiver } = await sb
       .from("developers")
       .select("id")
-      .eq("github_login", gifted_to_login.toLowerCase())
+      .ilike("github_login", gifted_to_login)
       .single();
 
     if (!receiver) {
@@ -97,21 +106,28 @@ export async function POST(request: Request) {
     // Check receiver doesn't already own this item (bought or gifted)
     const { data: receiverOwnsBought } = await sb
       .from("purchases")
-      .select("id")
+      .select("id, amount_cents, provider")
       .eq("developer_id", receiver.id)
       .is("gifted_to", null)
       .eq("item_id", item_id)
-      .eq("status", "completed")
-      .maybeSingle();
+      .eq("status", "completed");
+
+    const realReceiverBought = (receiverOwnsBought ?? []).find(
+      (p) => !(p.amount_cents === 0 && ["stripe", "cashfree", "abacatepay", "nowpayments"].includes(p.provider))
+    );
+
     const { data: receiverOwnsGifted } = await sb
       .from("purchases")
-      .select("id")
+      .select("id, amount_cents, provider")
       .eq("gifted_to", receiver.id)
       .eq("item_id", item_id)
-      .eq("status", "completed")
-      .maybeSingle();
+      .eq("status", "completed");
 
-    if (receiverOwnsBought || receiverOwnsGifted) {
+    const realReceiverGifted = (receiverOwnsGifted ?? []).find(
+      (p) => !(p.amount_cents === 0 && ["stripe", "cashfree", "abacatepay", "nowpayments"].includes(p.provider))
+    );
+
+    if (realReceiverBought || realReceiverGifted) {
       return NextResponse.json({ error: "Receiver already owns this item" }, { status: 409 });
     }
 
@@ -145,6 +161,8 @@ export async function POST(request: Request) {
     }
   }
 
+  const isConsumable = item.category === "consumable";
+
   // Streak freeze: consumable with max 2 stored
   if (item_id === "streak_freeze") {
     const { data: freezeDev } = await sb
@@ -174,7 +192,7 @@ export async function POST(request: Request) {
     // Fetch building dimensions to calculate max slots
     const { data: devFull } = await sb
       .from("developers")
-      .select("github_login, contributions, public_repos, total_stars, rank, contributions_total, contribution_years, total_prs, total_reviews, repos_contributed_to, followers, following, organizations_count, account_created_at, current_streak, longest_streak, active_days_last_year, language_diversity, top_repos")
+      .select("github_login, contributions, public_repos, total_stars, rank, contributions_total, contribution_years, total_prs, total_reviews, repos_contributed_to, followers, following, organizations_count, account_created_at, current_streak, longest_streak, active_days_last_year, language_diversity, top_repos, building_style")
       .eq("id", dev.id)
       .single();
 
@@ -188,6 +206,7 @@ export async function POST(request: Request) {
         20_000, // maxContrib estimate
         200_000, // maxStars estimate
         (devFull.contributions_total ?? 0) > 0 ? devFull : undefined,
+        devFull.building_style ?? undefined,
       );
       const w = dims.width;
       const d = dims.depth;
@@ -204,57 +223,53 @@ export async function POST(request: Request) {
         );
       }
     }
-  } else if (!giftedToDevId) {
-    // Non-billboard, non-gift items: check if buyer already owns it
-    const { data: existingPurchase } = await sb
+  } else if (!isConsumable && !giftedToDevId) {
+    // Non-consumable, non-billboard, non-gift items: check if buyer already owns it
+    // Exclude dev-mode purchases (amount_cents=0) so real purchases can proceed
+    const { data: existingPurchases } = await sb
       .from("purchases")
-      .select("id")
+      .select("id, amount_cents, provider")
       .eq("developer_id", dev.id)
       .eq("item_id", item_id)
-      .eq("status", "completed")
-      .maybeSingle();
+      .eq("status", "completed");
 
-    if (existingPurchase) {
+    const realPurchase = (existingPurchases ?? []).find(
+      (p) => !(p.amount_cents === 0 && ["stripe", "cashfree", "abacatepay", "nowpayments"].includes(p.provider))
+    );
+
+    if (realPurchase) {
       return NextResponse.json({ error: "Already owned" }, { status: 409 });
     }
   }
 
-  // Check for existing pending purchase (prevent double-click)
-  const { data: pendingPurchase } = await sb
-    .from("purchases")
-    .select("id")
-    .eq("developer_id", dev.id)
-    .eq("item_id", item_id)
-    .eq("status", "pending")
-    .maybeSingle();
+  // DEV BYPASS: Allow Ishant_27 / ixotic / ixotic27 to get items for free for testing
+  const isDev = ["ishant_27", "ixotic", "ixotic27"].includes(githubLogin.toLowerCase()) && body.dev_mode === true;
+  const isFree = item.price_usd_cents === 0;
 
-  if (pendingPurchase) {
-    // Delete stale pending purchase to allow retry
-    await sb.from("purchases").delete().eq("id", pendingPurchase.id);
-  }
-
-  // DEV BYPASS: Allow Ishant_27 to get items for free for testing
-  const isDev = githubLogin.toLowerCase() === "ishant_27";
-
-  if (isDev) {
-    console.log(`[DEV] Bypassing payment for ${githubLogin}`);
+  if (isDev || isFree) {
+    console.log(`Bypassing payment for ${githubLogin} (Dev: ${isDev}, Free: ${isFree})`);
+    const recipientId = giftedToDevId ?? dev.id;
+    const { status: purchaseStatus } = await fulfillItemPurchase(recipientId, item_id, sb);
     const { data: purchase, error: purchaseError } = await sb
       .from("purchases")
       .insert({
         developer_id: dev.id,
         item_id,
-        provider: "stripe",
+        provider: isFree ? "free" : "stripe",
+        idempotency_key: `dev_${dev.id}_${item_id}_${Date.now()}`,
         amount_cents: 0,
         currency: "usd",
-        status: "completed",
+        status: purchaseStatus,
         ...(giftedToDevId ? { gifted_to: giftedToDevId } : {}),
       })
       .select("id")
       .single();
 
     if (purchaseError) {
-      return NextResponse.json({ error: "Failed to create dev purchase" }, { status: 500 });
+      return NextResponse.json({ error: "Failed to create dev/free purchase" }, { status: 500 });
     }
+
+    await autoEquipIfSolo(recipientId, item_id);
 
     // Return a success URL that redirects back to the shop/city
     return NextResponse.json({
@@ -262,6 +277,7 @@ export async function POST(request: Request) {
       purchase_id: purchase.id
     });
   }
+
 
   try {
     if (provider === "stripe") {
@@ -281,10 +297,13 @@ export async function POST(request: Request) {
         .single();
 
       if (purchaseError) {
+        if (purchaseError.code === "23505") {
+          return NextResponse.json({ error: "A pending purchase already exists for this item" }, { status: 409 });
+        }
         return NextResponse.json({ error: "Failed to create purchase" }, { status: 500 });
       }
 
-      const { url } = await createCheckoutSession(item_id, dev.id, githubLogin, stripeCurrency, user.email, giftedToDevId, gifted_to_login);
+      const { url } = await createCheckoutSession(item_id, dev.id, githubLogin, stripeCurrency, user.email, giftedToDevId, gifted_to_login, purchase.id);
       return NextResponse.json({ url, purchase_id: purchase.id });
     } else if (provider === "nowpayments") {
       // Crypto via NOWPayments
@@ -303,18 +322,63 @@ export async function POST(request: Request) {
         .single();
 
       if (purchaseError) {
+        if (purchaseError.code === "23505") {
+          return NextResponse.json({ error: "A pending purchase already exists for this item" }, { status: 409 });
+        }
         return NextResponse.json({ error: "Failed to create purchase" }, { status: 500 });
       }
 
-      const { invoiceUrl } = await createCryptoInvoice(item_id, dev.id, githubLogin);
+      const { invoiceUrl } = await createCryptoInvoice(item_id, dev.id, githubLogin, purchase.id);
 
-      // Save lookup key as provider_tx_id so webhook can find this purchase
       await sb
         .from("purchases")
-        .update({ provider_tx_id: `${dev.id}:${item_id}` })
+        .update({ provider_tx_id: purchase.id })
         .eq("id", purchase.id);
 
-      return NextResponse.json({ url: invoiceUrl, purchase_id: purchase.id });
+      return NextResponse.json({ url: invoiceUrl, purchase_id: purchase.id });      
+    } else if (provider === "cashfree") {
+      // Cashfree (INR via UPI / Cards / Wallets)
+      if (!phone || !/^[6-9]\d{9}$/.test(phone.trim())) {
+        return NextResponse.json(
+          { error: "A valid 10-digit phone number is required for Cashfree payment" },
+          { status: 400 }
+        );
+      }
+
+      const USD_TO_INR = 85;
+      const amountCents = item.price_usd_cents;
+      const { data: purchase, error: purchaseError } = await sb
+        .from("purchases")
+        .insert({
+          developer_id: dev.id,
+          item_id,
+          provider: "cashfree",
+          amount_cents: amountCents,
+          currency: "usd",
+          status: "pending",
+          ...(giftedToDevId ? { gifted_to: giftedToDevId } : {}),
+        })
+        .select("id")
+        .single();
+
+      if (purchaseError) {
+        if (purchaseError.code === "23505") {
+          return NextResponse.json({ error: "A pending purchase already exists for this item" }, { status: 409 });
+        }
+        return NextResponse.json({ error: "Failed to create purchase" }, { status: 500 });
+      }
+
+      const { paymentSessionId, orderId } = await createCashfreeCheckout(
+        item_id, dev.id, githubLogin, user.email ?? undefined, phone.trim(), giftedToDevId, gifted_to_login
+      );
+
+      // Save Cashfree order_id as provider_tx_id so webhook can find this purchase
+      await sb
+        .from("purchases")
+        .update({ provider_tx_id: orderId })
+        .eq("id", purchase.id);
+
+      return NextResponse.json({ paymentSessionId, cashfreeOrderId: orderId, purchase_id: purchase.id });
     } else {
       // AbacatePay
       const { data: purchase, error: purchaseError } = await sb
@@ -332,6 +396,9 @@ export async function POST(request: Request) {
         .single();
 
       if (purchaseError) {
+        if (purchaseError.code === "23505") {
+          return NextResponse.json({ error: "A pending purchase already exists for this item" }, { status: 409 });
+        }
         return NextResponse.json({ error: "Failed to create purchase" }, { status: 500 });
       }
 
@@ -345,10 +412,10 @@ export async function POST(request: Request) {
 
       return NextResponse.json({ brCode, brCodeBase64, purchase_id: purchase.id });
     }
-  } catch (err) {
+  } catch (err: any) {
     console.error("Checkout error:", err);
     return NextResponse.json(
-      { error: "Failed to create checkout session" },
+      { error: err instanceof Error ? err.message : "Failed to create checkout session" },
       { status: 500 }
     );
   }

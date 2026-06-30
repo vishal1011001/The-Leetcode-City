@@ -24,7 +24,7 @@ export async function POST(request: Request) {
   }
 
   // Per-user rate limit
-  const { ok } = rateLimit(`visit:${user.id}`, 2, 1000);
+  const { ok } = await rateLimit(`visit:${user.id}`, 2, 1000);
   if (!ok) {
     return NextResponse.json({ error: "Too fast" }, { status: 429 });
   }
@@ -41,7 +41,7 @@ export async function POST(request: Request) {
   const { data: visitor } = await admin
     .from("developers")
     .select("id")
-    .eq("github_login", githubLogin)
+    .eq("claimed_by", user.id)
     .single();
 
   if (!visitor) {
@@ -51,8 +51,8 @@ export async function POST(request: Request) {
   // Fetch building owner
   const { data: building } = await admin
     .from("developers")
-    .select("id")
-    .eq("github_login", building_login.toLowerCase())
+    .select("id, github_login")
+    .ilike("github_login", building_login)
     .single();
 
   if (!building) {
@@ -61,8 +61,6 @@ export async function POST(request: Request) {
 
   // Track activity
   await touchLastActive(visitor.id);
-  await trackDailyMission(visitor.id, "visit_building");
-  await trackDailyMission(visitor.id, "visit_3_buildings");
 
   // No self-visits
   if (visitor.id === building.id) {
@@ -94,7 +92,11 @@ export async function POST(request: Request) {
     await admin.rpc("increment_visit_count", { target_dev_id: building.id });
 
     // Grant XP for visiting a building
-    await admin.rpc("grant_xp", { p_developer_id: visitor.id, p_source: "visit", p_amount: 2 });
+    await admin.rpc("grant_xp_atomic", { p_developer_id: visitor.id, p_source: "visit", p_amount: 2 });
+
+    // Only credit daily missions for genuine, unique visits
+    await trackDailyMission(visitor.id, "visit_building");
+    await trackDailyMission(visitor.id, "visit_3_buildings");
 
     // Check if building crossed visit milestone (>5 visits today)
     const { count: todayVisits } = await admin
@@ -117,7 +119,7 @@ export async function POST(request: Request) {
         await admin.from("activity_feed").insert({
           event_type: "visit_milestone",
           target_id: building.id,
-          metadata: { login: building_login.toLowerCase(), visit_count: todayVisits },
+          metadata: { login: building.github_login, visit_count: todayVisits },
         });
       }
     }

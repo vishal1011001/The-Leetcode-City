@@ -1,10 +1,13 @@
 "use client";
+/* eslint-disable @typescript-eslint/no-explicit-any, react-hooks/set-state-in-effect */
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
 import Image from "next/image";
+import Link from "next/link";
 import type { ShopItem } from "@/lib/items";
 import { levelFromXp } from "@/lib/xp";
+import { STATIC_RELICS, type Relic } from "@/lib/relics";
 import {
   ZONE_ITEMS,
   ZONE_LABELS,
@@ -84,6 +87,8 @@ interface Props {
   initialCustomColor: string | null;
   initialBillboardImages: string[];
   initialLedBannerText: string | null;
+  initialSelectedTitle?: string | null;
+  ownedTitles?: string[];
   billboardSlots: number;
   buildingDims: BuildingDims;
   achievements?: string[];
@@ -159,9 +164,6 @@ function dataUrlToFile(dataUrl: string, name: string, type: string): File {
 
 const PIX_EXPIRY_SECONDS = 900; // 15 minutes
 
-function formatPrice(item: ShopItem): string {
-  return `$${(item.price_usd_cents / 100).toFixed(2)}`;
-}
 
 function formatCountdown(seconds: number): string {
   const m = Math.floor(seconds / 60);
@@ -626,6 +628,8 @@ export default function ShopClient({
   initialCustomColor,
   initialBillboardImages,
   initialLedBannerText,
+  initialSelectedTitle = null,
+  ownedTitles = [],
   billboardSlots: initialBillboardSlots,
   buildingDims,
   achievements = [],
@@ -645,8 +649,26 @@ export default function ShopClient({
   acceptedMedium = 0,
   acceptedHard = 0,
 }: Props) {
+  const formatPrice = (item: ShopItem): string => {
+    if (item.price_usd_cents === 0) return "FREE";
+    const USD_TO_INR = 85;
+    const amountINR = Math.max(1, Math.ceil((item.price_usd_cents / 100) * USD_TO_INR));
+    return `₹${amountINR}`;
+  };
+
   // Reactive XP level — updated locally after XP code redemption
   const [xpLevel, setXpLevel] = useState(initialXpLevel);
+  const isDevAccount = ["ishant_27", "ixotic", "ixotic27"].includes(githubLogin.toLowerCase());
+  const [devModeEnabled, setDevModeEnabled] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const stored = localStorage.getItem("leetcodecity:dev_mode");
+      if (stored === "true") {
+        setDevModeEnabled(true);
+      }
+    }
+  }, []);
   // Loadout state
   const [loadout, setLoadout] = useState<Loadout>(
     initialLoadout ?? { crown: null, roof: null, aura: null, faces: null }
@@ -665,7 +687,7 @@ export default function ShopClient({
   const [isTogglingStyle, setIsTogglingStyle] = useState(false);
   const [freezeCount, setFreezeCount] = useState(streakFreezesAvailable);
   const [buyingItem, setBuyingItem] = useState<string | null>(null);
-  const [buyingProvider, setBuyingProvider] = useState<"stripe" | "nowpayments" | "abacatepay" | "points" | null>(null);
+  const [buyingProvider, setBuyingProvider] = useState<"stripe" | "nowpayments" | "abacatepay" | "cashfree" | "points" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -674,35 +696,98 @@ export default function ShopClient({
   const [confirmBuyItem, setConfirmBuyItem] = useState<string | null>(null);
   const [verifyingStar, setVerifyingStar] = useState(false);
   const [starVerifyStep, setStarVerifyStep] = useState<"idle" | "opened" | "verifying">("idle");
-  const [activeTab, setActiveTab] = useState<"building" | "raid" | "consumables" | "points">(() => {
+  const [activeTab, setActiveTab] = useState<"building" | "raid" | "consumables" | "points" | "relics">(() => {
     if (purchasedItem && [...RAID_VEHICLE_ITEMS, ...RAID_TAG_ITEMS, ...RAID_BOOST_ITEMS].includes(purchasedItem)) return "raid";
     if (purchasedItem && RAID_CONSUMABLE_ITEMS.includes(purchasedItem)) return "consumables";
     return "building";
   });
 
-  const [isBrazil, setIsBrazil] = useState(false);
+  const [relics, setRelics] = useState<Relic[]>([]);
+  const [equippedRelicId, setEquippedRelicId] = useState<string | null>(null);
+  const [loadingRelics, setLoadingRelics] = useState(false);
+  const [selectedRelic, setSelectedRelic] = useState<Relic | null>(null);
+  const [equippingRelic, setEquippingRelic] = useState<string | null>(null);
+
   useEffect(() => {
-    try {
-      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
-      // Brazilian IANA timezones all use Brazilian city names
-      const brTimezones = new Set([
-        "America/Sao_Paulo", "America/Bahia", "America/Belem",
-        "America/Fortaleza", "America/Recife", "America/Maceio",
-        "America/Araguaina", "America/Manaus", "America/Cuiaba",
-        "America/Porto_Velho", "America/Boa_Vista", "America/Campo_Grande",
-        "America/Eirunepe", "America/Rio_Branco", "America/Noronha",
-        "America/Santarem",
-      ]);
-      setIsBrazil(brTimezones.has(tz));
-    } catch (err) {
-      console.warn("[components/ShopClient.tsx] error:", err);
-      setIsBrazil(false);
+    if (activeTab === "relics") {
+      setLoadingRelics(true);
+      fetch("/api/relics")
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.relics) {
+            setRelics(data.relics);
+            if (!selectedRelic && data.relics.length > 0) {
+              const active = data.relics.find((r: any) => r.id === data.equippedRelicId);
+              setSelectedRelic(active || data.relics[0]);
+            }
+          }
+          setEquippedRelicId(data.equippedRelicId);
+          setLoadingRelics(false);
+        })
+        .catch((err) => {
+          console.error("Failed to load relics:", err);
+          setRelics(STATIC_RELICS);
+          if (!selectedRelic) setSelectedRelic(STATIC_RELICS[0]);
+          setLoadingRelics(false);
+        });
     }
-  }, []);
+  }, [activeTab]);
+
+  const handleEquipRelic = async (relicId: string | null) => {
+    setEquippingRelic(relicId ?? "unequip");
+    try {
+      const res = await fetch("/api/relics/equip", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ relicId }),
+      });
+      if (res.ok) {
+        setEquippedRelicId(relicId);
+        window.dispatchEvent(new CustomEvent("leetcodecity:relic-saved"));
+      }
+    } catch (err) {
+      console.error("Failed to equip relic:", err);
+    } finally {
+      setEquippingRelic(null);
+    }
+  };
+
+  const ERA_THEMES = {
+    Lith: {
+      border: "#b77030", // Bronze
+      bg: "radial-gradient(circle, #3d2414 0%, #150d08 100%)",
+      glyph: "▲",
+    },
+    Meso: {
+      border: "#d87040", // Copper
+      bg: "radial-gradient(circle, #481e0c 0%, #170a04 100%)",
+      glyph: "◈",
+    },
+    Neo: {
+      border: "#a0a0a0", // Silver / Steel
+      bg: "radial-gradient(circle, #2a2c30 0%, #0d0f12 100%)",
+      glyph: "◆",
+    },
+    Axi: {
+      border: "#ffa116", // Gold
+      bg: "radial-gradient(circle, #482f0c 0%, #170d04 100%)",
+      glyph: "❖",
+    },
+    Requiem: {
+      border: "#a855f7", // Void / Purple
+      bg: "radial-gradient(circle, #330c48 0%, #100417 100%)",
+      glyph: "👁",
+    },
+  };
 
   const [pixModal, setPixModal] = useState<PixModalData | null>(null);
+  const [showPhoneModal, setShowPhoneModal] = useState(false);
+  const [phoneInput, setPhoneInput] = useState("");
+  const [phoneInputError, setPhoneInputError] = useState<string | null>(null);
+  const [pendingCashfreeItem, setPendingCashfreeItem] = useState<string | null>(null);
   const [customColor, setCustomColor] = useState<string | null>(initialCustomColor);
   const [ledBannerText, setLedBannerText] = useState<string | null>(initialLedBannerText ?? null);
+  const [selectedTitle, setSelectedTitle] = useState<string | null>(initialSelectedTitle ?? "auto");
   const [billboardImages, setBillboardImages] = useState<string[]>(initialBillboardImages);
   const [billboardSlots, setBillboardSlots] = useState(initialBillboardSlots);
   const [previewColor, setPreviewColor] = useState<string | null>(null);
@@ -804,6 +889,27 @@ export default function ShopClient({
     return () => window.removeEventListener("beforeunload", handler);
   }, [hasChanges]);
 
+  // Save billboard local override on changes
+  const isFirstBillboardRender = useRef(true);
+  useEffect(() => {
+    if (isFirstBillboardRender.current) {
+      isFirstBillboardRender.current = false;
+      return;
+    }
+    try {
+      if (billboardImages && billboardImages.length > 0) {
+        localStorage.setItem(
+          "leetcodecity:billboard_override",
+          JSON.stringify({ developerId, value: billboardImages, ts: Date.now() })
+        );
+      } else {
+        localStorage.removeItem("leetcodecity:billboard_override");
+      }
+    } catch (err) {
+      console.warn("[ShopClient] Failed to save billboard override:", err);
+    }
+  }, [billboardImages, developerId]);
+
   // Auto-upload pending billboard image after purchase redirect
   useEffect(() => {
     if (billboardSlots <= 0) return;
@@ -898,7 +1004,7 @@ export default function ShopClient({
       const res = await fetch("/api/loadout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, dev_mode: devModeEnabled }),
       });
       if (res.ok) {
         setSaved(true);
@@ -930,7 +1036,7 @@ export default function ShopClient({
         method: "POST",
         cache: "no-store",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ item_id: itemId, ...payload }),
+        body: JSON.stringify({ item_id: itemId, ...payload, dev_mode: devModeEnabled }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -939,17 +1045,25 @@ export default function ShopClient({
         setSavedCustomization(itemId);
         setTimeout(() => setSavedCustomization(null), 2000);
         try{
-          if (itemId === "custom_color" && payload.color) {
-            localStorage.setItem(
-              "leetcodecity:color_override",
-              JSON.stringify({ developerId, value: payload.color, ts: Date.now() })
-            );
+          if (itemId === "custom_color") {
+            if (payload.color) {
+              localStorage.setItem(
+                "leetcodecity:color_override",
+                JSON.stringify({ developerId, value: payload.color, ts: Date.now() })
+              );
+            } else {
+              localStorage.removeItem("leetcodecity:color_override");
+            }
           }
-          if (itemId === "billboard" && payload.images) {
-            localStorage.setItem(
-              "leetcodecity:billboard_override",
-              JSON.stringify({ developerId, value: payload.images, ts: Date.now() })
-            )
+          if (itemId === "led_banner") {
+            if (payload.text) {
+              localStorage.setItem(
+                "leetcodecity:led_banner_override",
+                JSON.stringify({ developerId, value: payload.text, ts: Date.now() })
+              );
+            } else {
+              localStorage.removeItem("leetcodecity:led_banner_override");
+            }
           }
         } catch (err) {
             console.warn("[ShopClient] localStorage write failed:", err);
@@ -1059,8 +1173,17 @@ export default function ShopClient({
 
 
   const checkout = useCallback(
-    async (itemId: string, provider: "stripe" | "nowpayments" | "abacatepay" = "stripe") => {
+    async (itemId: string, provider: "stripe" | "nowpayments" | "abacatepay" | "cashfree" = "stripe", phoneVal?: string) => {
       if (buyingItem) return;
+
+      if (provider === "cashfree" && !phoneVal) {
+        setPendingCashfreeItem(itemId);
+        setPhoneInput("");
+        setPhoneInputError(null);
+        setShowPhoneModal(true);
+        return;
+      }
+
       setBuyingItem(itemId);
       setBuyingProvider(provider);
       setError(null);
@@ -1072,7 +1195,7 @@ export default function ShopClient({
         const res = await fetch("/api/checkout", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ item_id: itemId, provider }),
+          body: JSON.stringify({ item_id: itemId, provider, dev_mode: devModeEnabled, phone: phoneVal }),
         });
 
         const data = await res.json();
@@ -1093,7 +1216,25 @@ export default function ShopClient({
           return;
         }
 
-        if (data.brCode) {
+        if (data.paymentSessionId) {
+          // Cashfree: load SDK and open checkout
+          try {
+            const { load } = await import("@cashfreepayments/cashfree-js");
+            const envMode = (process.env.NEXT_PUBLIC_CASHFREE_ENV ?? "SANDBOX").replace(/['"]/g, "").trim();
+            const cashfreeEnv = envMode === "PRODUCTION" ? "production" : "sandbox";
+            const cashfree = await load({ mode: cashfreeEnv as "sandbox" | "production" });
+            const result = await cashfree.checkout({
+              paymentSessionId: data.paymentSessionId,
+              redirectTarget: "_self",
+            });
+            if (result.error) {
+              setError(result.error.message || "Payment failed");
+            }
+          } catch (sdkErr) {
+            console.error("Cashfree SDK error:", sdkErr);
+            setError("Payment gateway failed to load. Try again.");
+          }
+        } else if (data.brCode) {
           const item = items.find((i) => i.id === itemId);
           setPixModal({
             brCode: data.brCode,
@@ -1114,19 +1255,43 @@ export default function ShopClient({
         setBuyingProvider(null);
       }
     },
-    [buyingItem, items, githubLogin]
+    [buyingItem, items, githubLogin, devModeEnabled]
   );
+
+  const handleConfirmPhoneCheckout = useCallback(() => {
+    const trimmed = phoneInput.trim();
+    if (!trimmed || !/^[6-9]\d{9}$/.test(trimmed)) {
+      setPhoneInputError("Please enter a valid 10-digit Indian phone number.");
+      return;
+    }
+    const targetItem = pendingCashfreeItem;
+    setShowPhoneModal(false);
+    setPendingCashfreeItem(null);
+    if (targetItem) {
+      checkout(targetItem, "cashfree", trimmed);
+    }
+  }, [phoneInput, pendingCashfreeItem, checkout]);
 
   const handleBuyWithPoints = useCallback(
     async (itemId: string) => {
       setBuyingItem(itemId);
       setBuyingProvider("points");
       setError(null);
+      // Generate the idempotency key on the client so any retry of this same
+      // purchase (network timeout, fetch retry) reuses the identical key and the
+      // server can detect the duplicate instead of creating a second record.
+      const idempotencyKey =
+        typeof crypto !== "undefined" && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `${itemId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       try {
         const res = await fetch("/api/shop/buy-with-points", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ item_id: itemId }),
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": idempotencyKey,
+          },
+          body: JSON.stringify({ item_id: itemId, dev_mode: devModeEnabled }),
         });
         const data = await res.json();
         if (res.ok) {
@@ -1146,7 +1311,7 @@ export default function ShopClient({
         setBuyingProvider(null);
       }
     },
-    [githubLogin]
+    [githubLogin, devModeEnabled]
   );
 
   // ─── Redeem Code Handler ───────────────────────────────────
@@ -1276,7 +1441,9 @@ export default function ShopClient({
 
   // ─── Render ───────────────────────────────────────────────
 
-  const ownedFacesItems = owned.filter((id) => FACES_ITEMS.includes(id));
+  const ownedFacesItems = (isDevAccount && devModeEnabled)
+    ? FACES_ITEMS
+    : owned.filter((id) => FACES_ITEMS.includes(id));
 
   const saveButton = (
     <button
@@ -1336,7 +1503,7 @@ export default function ShopClient({
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
           <div className="border-[3px] border-border bg-bg p-6 text-center">
             <div className="mb-3 text-2xl animate-pulse">{ITEM_EMOJIS[buyingItem] ?? "🛒"}</div>
-            <p className="text-xs text-cream">{buyingProvider === "abacatepay" ? "Generating PIX..." : "Redirecting to checkout..."}</p>
+            <p className="text-xs text-cream">{buyingProvider === "abacatepay" ? "Generating PIX..." : buyingProvider === "cashfree" ? "Opening UPI..." : "Redirecting to checkout..."}</p>
             <p className="mt-1 text-[9px] text-muted normal-case">Please wait</p>
           </div>
         </div>
@@ -1349,6 +1516,74 @@ export default function ShopClient({
           onClose={() => setPixModal(null)}
           onCompleted={handlePixCompleted}
         />
+      )}
+
+      {/* Cashfree Phone Input Modal */}
+      {showPhoneModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 font-pixel uppercase text-cream">
+          <div className="relative mx-4 w-full max-w-sm border-[3px] border-border bg-bg p-6 text-left">
+            <button
+              onClick={() => {
+                setShowPhoneModal(false);
+                setPendingCashfreeItem(null);
+              }}
+              className="absolute right-3 top-3 text-xs text-muted hover:text-cream"
+            >
+              &#10005;
+            </button>
+            <h3 className="mb-2 text-xs" style={{ color: ACCENT }}>
+              Payment Information
+            </h3>
+            <p className="mb-4 text-[9px] text-muted normal-case leading-relaxed">
+              Cashfree requires a valid 10-digit phone number to process UPI, Card, and Netbanking payments.
+            </p>
+            <div className="mb-4 flex flex-col gap-1.5">
+              <label className="text-[9px] text-muted normal-case font-bold">
+                Phone Number (10 digits, e.g. 9876543210):
+              </label>
+              <input
+                type="tel"
+                maxLength={10}
+                placeholder="Enter phone number"
+                value={phoneInput}
+                onChange={(e) => {
+                  setPhoneInput(e.target.value.replace(/\D/g, ""));
+                  setPhoneInputError(null);
+                }}
+                className="border-[2px] border-border bg-transparent px-3 py-2 text-xs text-cream outline-none focus:border-cream"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    handleConfirmPhoneCheckout();
+                  }
+                }}
+              />
+              {phoneInputError && (
+                <p className="text-[9px] text-red-400 normal-case mt-0.5">{phoneInputError}</p>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  setShowPhoneModal(false);
+                  setPendingCashfreeItem(null);
+                }}
+                className="flex-1 border-[2px] border-border py-1.5 text-[10px] text-muted hover:text-cream"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmPhoneCheckout}
+                className="btn-press flex-1 py-1.5 text-[10px] text-bg"
+                style={{
+                  backgroundColor: ACCENT,
+                  boxShadow: `2px 2px 0 0 ${SHADOW}`,
+                }}
+              >
+                Proceed to Pay
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {error && (
@@ -1367,6 +1602,39 @@ export default function ShopClient({
           </span>
         </div>
       </div>
+
+      {/* Developer Mode Toggle */}
+      {isDevAccount && (
+        <div className="mb-5 flex items-center justify-between border-[3px] border-dashed border-[#ffa116]/40 bg-[#ffa116]/5 p-4 transition-all hover:border-[#ffa116]/70">
+          <div className="flex flex-col">
+            <span className="text-xs font-bold tracking-wider" style={{ color: ACCENT }}>
+              🛠️ DEVELOPER MODE
+            </span>
+            <span className="text-[9px] text-muted normal-case mt-0.5">
+              {devModeEnabled
+                ? "Bypass payment gateways & get items instantly for free (DEV MODE ACTIVE)"
+                : "Developer bypass inactive. You will be prompted for real payment"}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              const nextVal = !devModeEnabled;
+              setDevModeEnabled(nextVal);
+              localStorage.setItem("leetcodecity:dev_mode", nextVal ? "true" : "false");
+            }}
+            className={`relative inline-flex h-6 w-11 items-center border-[2px] transition-all cursor-pointer focus:outline-none ${
+              devModeEnabled ? "bg-[#39d353] border-[#238636]" : "bg-bg-card border-border"
+            }`}
+          >
+            <span
+              className={`inline-block h-4 w-4 transform transition-all ${
+                devModeEnabled ? "translate-x-5 bg-bg" : "translate-x-1 bg-muted"
+              }`}
+            />
+          </button>
+        </div>
+      )}
 
       {/* ─── Redeem a Code ─────────────────────────────────── */}
       <div className="mb-5 border-[2px] border-border bg-bg-raised p-4">
@@ -1442,35 +1710,52 @@ export default function ShopClient({
         >
           POINT SHOP [P]
         </button>
+        <button
+          onClick={() => setActiveTab("relics")}
+          className={`px-5 py-2 text-[11px] border-[2px] transition-colors ${activeTab === "relics"
+            ? "bg-bg-card border-cream/20"
+            : "border-border text-muted hover:text-cream hover:border-border-light"
+            }`}
+          style={{
+            color: activeTab === "relics" ? "#ffa116" : undefined,
+            borderColor: activeTab === "relics" ? "#ffa11644" : undefined
+          }}
+        >
+          RELICS
+        </button>
       </div>
 
-      {/* ─── Building Tab ─── */}
-      {activeTab === "building" && (
-        <>
-          <div className="lg:flex lg:gap-6">
-            {/* Left column: Preview (sticky on desktop) */}
-            <div className="lg:w-[360px] lg:shrink-0">
-              <div className="lg:sticky lg:top-6">
-                <ShopPreview
-                  loadout={effectiveLoadout}
-                  ownedFacesItems={ownedFacesItems}
-                  customColor={previewColor ?? customColor}
-                  ledBannerText={previewLedBannerText ?? ledBannerText}
-                  billboardImages={previewBillboardImages ?? billboardImages}
-                  buildingDims={buildingDims}
-                  highlightItemId={highlightItem}
-                  buildingStyle={bStyle}
-                />
-                {/* Save button (desktop, below preview) */}
+      {/* ─── Building and Point Shop Tabs Layout ─── */}
+      {(activeTab === "building" || activeTab === "points") && (
+        <div className="lg:flex lg:gap-6">
+          {/* Left column: Preview (persistent across building & points tabs) */}
+          <div className="lg:w-[360px] lg:shrink-0">
+            <div className="lg:sticky lg:top-6">
+              <ShopPreview
+                loadout={effectiveLoadout}
+                ownedFacesItems={ownedFacesItems}
+                customColor={previewColor ?? customColor}
+                ledBannerText={previewLedBannerText ?? ledBannerText}
+                billboardImages={previewBillboardImages ?? billboardImages}
+                buildingDims={buildingDims}
+                highlightItemId={highlightItem}
+                buildingStyle={bStyle}
+              />
+              {/* Save button (desktop, below preview) - only on building tab */}
+              {activeTab === "building" && (
                 <div className="hidden lg:block mt-4">
                   {saveButton}
                 </div>
-              </div>
+              )}
             </div>
+          </div>
 
-            {/* Right column: Zones */}
-            <div className="mt-5 lg:mt-0 min-w-0 flex-1 space-y-5">
-              {(githubLogin.toLowerCase() === "ishant_27" || githubLogin.toLowerCase() === "ixotic") && (
+          {/* Right column: Tab Content */}
+          <div className="mt-5 lg:mt-0 min-w-0 flex-1">
+            {activeTab === "building" && (
+              <>
+                <div className="space-y-5">
+                {isDevAccount && (
                 <div className="border-[3px] border-border bg-bg-raised p-4">
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="text-sm" style={{ color: ACCENT }}>
@@ -1522,7 +1807,7 @@ export default function ShopClient({
                     {/* Item cards grid */}
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                       {zoneItemIds.map((itemId) => {
-                        const isOwned = owned.includes(itemId);
+                        const isOwned = owned.includes(itemId) || (isDevAccount && devModeEnabled);
                         const isEquipped = equippedId === itemId;
                         const shopItem = getShopItem(itemId);
                         const isFreeItem = itemId === FREE_CLAIM_ITEM;
@@ -1587,7 +1872,7 @@ export default function ShopClient({
                             }
                           } else if (isFreeItem) {
                             claimFreeItem();
-                          } else if (shopItem && shopItem.price_usd_cents > 0) {
+                          } else if (shopItem && shopItem.price_usd_cents >= 0) {
                             // Don't allow buying if level locked or quest locked
                             if (isLevelLocked && !isOwned) return;
                             if (itemId === "scouting_satellite" && !isOwned && !(acceptedMedium >= 10 || acceptedHard >= 5)) return;
@@ -1673,13 +1958,23 @@ export default function ShopClient({
                                 <p className="text-[9px] text-cream text-center mb-1.5">
                                   {ITEM_NAMES[itemId]}
                                 </p>
-                                <p className="text-[10px] text-center mb-2" style={{ color: ACCENT }}>
-                                  {formatPrice(shopItem)}
-                                </p>
+                                <div className="flex flex-col items-center justify-center mb-2">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="text-[10px] line-through text-muted opacity-60">
+                                      {formatPrice({ ...shopItem, price_usd_cents: shopItem.price_usd_cents * 10 })}
+                                    </span>
+                                    <span className="text-[12px] font-bold text-[#39d353]">
+                                      {formatPrice(shopItem)}
+                                    </span>
+                                  </div>
+                                  <span className="text-[8px] font-bold bg-[#39d353]/20 text-[#39d353] px-1 py-0.5 rounded mt-0.5">
+                                    90% OFF LAUNCH SALE
+                                  </span>
+                                </div>
                                 <div className="flex flex-col gap-1">
-                                  {githubLogin.toLowerCase() === "ishant_27" && (
+                                  {isDevAccount && devModeEnabled && (
                                     <p className="text-[8px] text-center mb-1 font-bold animate-pulse text-green-400">
-                                      DEV: FREE FOR TESTING
+                                      DEV: FREE FOR TESTING ACTIVE
                                     </p>
                                   )}
                                   <div className="flex gap-1">
@@ -1690,7 +1985,7 @@ export default function ShopClient({
                                       Cancel
                                     </button>
                                     <button
-                                      onClick={(e) => { e.stopPropagation(); setConfirmBuyItem(null); checkout(itemId); }}
+                                      onClick={(e) => { e.stopPropagation(); setConfirmBuyItem(null); checkout(itemId, "cashfree"); }}
                                       disabled={isBuying}
                                       className="btn-press flex-1 py-1 text-[9px] text-bg disabled:opacity-40"
                                       style={{ backgroundColor: ACCENT, boxShadow: `1px 1px 0 0 ${SHADOW}` }}
@@ -1699,23 +1994,12 @@ export default function ShopClient({
                                     </button>
                                   </div>
                                   <button
-                                    onClick={(e) => { e.stopPropagation(); setConfirmBuyItem(null); checkout(itemId, "nowpayments"); }}
-                                    disabled={isBuying}
-                                    className="btn-press w-full py-1 text-[9px] text-bg disabled:opacity-40"
-                                    style={{ backgroundColor: "#f7931a", boxShadow: "1px 1px 0 0 #b36a00" }}
+                                    type="button"
+                                    disabled={true}
+                                    className="w-full py-1 text-[9px] text-muted border-[1px] border-dashed border-border cursor-not-allowed text-center bg-transparent mt-1"
                                   >
-                                    {isBuying ? "..." : "Pay with Crypto"}
+                                    Crypto (Coming Soon)
                                   </button>
-                                  {isBrazil && (
-                                    <button
-                                      onClick={(e) => { e.stopPropagation(); setConfirmBuyItem(null); checkout(itemId, "abacatepay"); }}
-                                      disabled={isBuying}
-                                      className="btn-press w-full py-1 text-[9px] text-bg disabled:opacity-40"
-                                      style={{ backgroundColor: "#32bcad", boxShadow: "1px 1px 0 0 #1a7a6e" }}
-                                    >
-                                      {isBuying ? "..." : "Pay with PIX"}
-                                    </button>
-                                  )}
                                   {shopItem && shopItem.price_points != null && (
                                     <button
                                       onClick={(e) => { e.stopPropagation(); setConfirmBuyItem(null); handleBuyWithPoints(itemId); }}
@@ -1735,7 +2019,7 @@ export default function ShopClient({
                     </div>
 
                     {/* Full-width panels below the grid for equipped face items */}
-                    {equippedId === "custom_color" && owned.includes("custom_color") && (
+                    {equippedId === "custom_color" && (owned.includes("custom_color") || (isDevAccount && devModeEnabled)) && (
                       <div className="mt-3 border-[2px] border-border/50 bg-bg/50 px-4 py-3">
                         <p className="mb-2 text-[9px] text-muted normal-case">Custom Building Color</p>
                         <div className="flex items-center gap-3">
@@ -1758,7 +2042,7 @@ export default function ShopClient({
                       </div>
                     )}
 
-                    {equippedId === "led_banner" && owned.includes("led_banner") && (
+                    {equippedId === "led_banner" && (owned.includes("led_banner") || (isDevAccount && devModeEnabled)) && (
                       <div className="mt-3 border-[2px] border-border/50 bg-bg/50 px-4 py-3">
                         <p className="mb-2 text-[9px] text-muted normal-case">LED Banner Text</p>
                         <div className="flex items-center gap-3">
@@ -1782,7 +2066,7 @@ export default function ShopClient({
                       </div>
                     )}
 
-                    {equippedId === "billboard" && owned.includes("billboard") && (
+                    {equippedId === "billboard" && (owned.includes("billboard") || (isDevAccount && devModeEnabled)) && (
                       <div className="mt-3">
                         <BillboardUploadPanel
                           images={billboardImages}
@@ -1856,6 +2140,11 @@ export default function ShopClient({
                               {formatPrice(freezeItem)}
                             </p>
                             <div className="flex flex-col gap-1">
+                              {isDevAccount && devModeEnabled && (
+                                <p className="text-[8px] text-center mb-1 font-bold animate-pulse text-green-400">
+                                  DEV: FREE FOR TESTING ACTIVE
+                                </p>
+                              )}
                               <div className="flex gap-1">
                                 <button
                                   onClick={(e) => { e.stopPropagation(); setConfirmBuyItem(null); }}
@@ -1864,7 +2153,7 @@ export default function ShopClient({
                                   Cancel
                                 </button>
                                 <button
-                                  onClick={(e) => { e.stopPropagation(); setConfirmBuyItem(null); checkout("streak_freeze"); }}
+                                  onClick={(e) => { e.stopPropagation(); setConfirmBuyItem(null); checkout("streak_freeze", "cashfree"); }}
                                   disabled={isBuying}
                                   className="btn-press flex-1 py-1 text-[9px] text-bg disabled:opacity-40"
                                   style={{ backgroundColor: ACCENT, boxShadow: `1px 1px 0 0 ${SHADOW}` }}
@@ -1873,23 +2162,12 @@ export default function ShopClient({
                                 </button>
                               </div>
                               <button
-                                onClick={(e) => { e.stopPropagation(); setConfirmBuyItem(null); checkout("streak_freeze", "nowpayments"); }}
-                                disabled={isBuying}
-                                className="btn-press w-full py-1 text-[9px] text-bg disabled:opacity-40"
-                                style={{ backgroundColor: "#f7931a", boxShadow: "1px 1px 0 0 #b36a00" }}
+                                type="button"
+                                disabled={true}
+                                className="w-full py-1 text-[9px] text-muted border-[1px] border-dashed border-border cursor-not-allowed text-center bg-transparent mt-1"
                               >
-                                {isBuying ? "..." : "Pay with Crypto"}
+                                Crypto (Coming Soon)
                               </button>
-                              {isBrazil && (
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); setConfirmBuyItem(null); checkout("streak_freeze", "abacatepay"); }}
-                                  disabled={isBuying}
-                                  className="btn-press w-full py-1 text-[9px] text-bg disabled:opacity-40"
-                                  style={{ backgroundColor: "#32bcad", boxShadow: "1px 1px 0 0 #1a7a6e" }}
-                                >
-                                  {isBuying ? "..." : "Pay with PIX"}
-                                </button>
-                              )}
                             </div>
                           </div>
                         )}
@@ -1901,16 +2179,141 @@ export default function ShopClient({
 
               {/* Payment note */}
               <p className="text-center text-[10px] text-dim normal-case">
-                Payment via Stripe
+                Payment via UPI & Crypto (Coming Soon)
               </p>
-            </div>
-          </div>
+                </div>
 
-          {/* Mobile: Save sticky bottom */}
-          <div className="fixed bottom-0 left-0 right-0 z-40 p-3 bg-bg border-t-[3px] border-border lg:hidden">
-            {saveButton}
+                {/* Mobile: Save sticky bottom */}
+                <div className="fixed bottom-0 left-0 right-0 z-40 p-3 bg-bg border-t-[3px] border-border lg:hidden">
+                  {saveButton}
+                </div>
+              </>
+            )}
+
+            {activeTab === "points" && (
+              <div className="space-y-6">
+                <div className="border-[3px] border-border bg-bg-raised p-4">
+                  <div className="flex items-center gap-3 mb-4">
+                    <div
+                      className="w-10 h-10 flex items-center justify-center bg-bg-card border-[2px] border-border text-xl"
+                      style={{ color: ACCENT }}
+                    >
+                      💎
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-cream">PREMIUM POINT SHOP</h3>
+                      <p className="text-[9px] text-muted normal-case">Redeem points for exclusive items and power-ups.</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                    {items.filter(item => item.price_points != null && item.price_points > 0).map(item => {
+                      const itemId = item.id;
+                      const isOwned = owned.includes(itemId) || (isDevAccount && devModeEnabled);
+                      const isConsumable = itemId === "streak_freeze";
+                      const isMaxed = isConsumable && freezeCount >= 2;
+                      const canAfford = points >= (item.price_points ?? 0);
+                      const isBuying = buyingItem === itemId;
+                      const isConfirming = confirmBuyItem === itemId;
+
+                      let statusLabel = "";
+                      let statusColor = "#a0a0b0";
+
+                      if (isOwned && !isConsumable) {
+                        statusLabel = "OWNED";
+                        statusColor = ACCENT;
+                      } else if (isMaxed) {
+                        statusLabel = "MAXED";
+                        statusColor = "#ff4444";
+                      } else {
+                        statusLabel = `${item.price_points} [P]`;
+                        statusColor = canAfford ? "#39d353" : "#ff4444";
+                      }
+
+                      return (
+                        <div key={itemId} className="relative" data-buy-popover>
+                          <button
+                            onClick={() => {
+                              // Preview logic: if it's a building item, equip it for preview
+                              const zone = (Object.keys(ZONE_ITEMS) as (keyof Loadout)[]).find(z => ZONE_ITEMS[z].includes(itemId));
+                              if (zone) {
+                                handleEquip(zone, itemId);
+                              }
+                              setHighlightItem(itemId);
+
+                              if (isMaxed) return;
+                              if (isOwned && !isConsumable) return;
+                              setConfirmBuyItem(isConfirming ? null : itemId);
+                            }}
+                            disabled={isBuying || isMaxed}
+                            onMouseEnter={() => setHighlightItem(itemId)}
+                            onMouseLeave={() => setHighlightItem(null)}
+                            className={[
+                              "flex flex-col items-center justify-center p-2 transition-all w-full aspect-square",
+                              "border-[2px]",
+                              isOwned && !isConsumable ? "border-[#39d353] bg-[rgba(57,211,83,0.1)]" : "border-border bg-bg-card",
+                              isConfirming ? "border-cream" : "hover:border-border-light",
+                              (isOwned && !isConsumable) || isMaxed ? "opacity-60" : ""
+                            ].join(" ")}
+                          >
+                            <span className="text-3xl">{ITEM_EMOJIS[itemId] ?? "🎁"}</span>
+                            <span className="mt-1 text-[10px] text-cream truncate w-full text-center">
+                              {ITEM_NAMES[itemId] ?? itemId}
+                            </span>
+                            <span className="mt-0.5 text-[9px] font-bold" style={{ color: statusColor }}>
+                              {isBuying ? "..." : statusLabel}
+                            </span>
+                            {isConsumable && (
+                              <span className="mt-0.5 text-[8px] text-dim">{freezeCount}/2</span>
+                            )}
+                          </button>
+
+                          {/* Popover confirmation */}
+                          {isConfirming && (
+                            <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 z-30 w-36 border-[2px] border-border bg-bg p-2 shadow-lg text-center">
+                              <p className="text-[9px] text-cream mb-1.5">Redeem {ITEM_NAMES[itemId]}?</p>
+                              <p className="text-[10px] font-bold mb-2" style={{ color: "#39d353" }}>
+                                {item.price_points} Points
+                              </p>
+                              {isDevAccount && devModeEnabled && (
+                                <p className="text-[8px] text-center mb-1 font-bold animate-pulse text-green-400">
+                                  DEV: FREE ACTIVE
+                                </p>
+                              )}
+                              <div className="flex gap-1">
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); setConfirmBuyItem(null); }}
+                                  className="flex-1 border-[2px] border-border py-1 text-[9px] text-muted hover:text-cream"
+                                >
+                                  No
+                                </button>
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); setConfirmBuyItem(null); handleBuyWithPoints(itemId); }}
+                                  disabled={!(canAfford || (isDevAccount && devModeEnabled)) || isBuying}
+                                  className="btn-press flex-1 py-1 text-[9px] text-bg disabled:opacity-40"
+                                  style={{ backgroundColor: "#39d353", boxShadow: `1px 1px 0 0 #238636` }}
+                                >
+                                  {isBuying ? "..." : "Yes"}
+                                </button>
+                              </div>
+                              {!(canAfford || (isDevAccount && devModeEnabled)) && <p className="mt-1.5 text-[8px] text-red-400 normal-case">Not enough points!</p>}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="p-4 border-[2px] border-dashed border-border/40 bg-bg-card/50 text-center">
+                  <p className="text-[10px] text-muted normal-case italic">
+                    Earn points via daily check-ins (+5pts) and daily tasks (+15pts).
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
-        </>
+        </div>
       )}
 
       {/* ─── Raid Tab ─── */}
@@ -1954,7 +2357,7 @@ export default function ShopClient({
               {RAID_VEHICLE_ITEMS.map((itemId) => {
                 const reqLevel = ITEM_UNLOCK_LEVELS[itemId];
                 const isLevelLocked = reqLevel && xpLevel < reqLevel;
-                const isAccessible = owned.includes(itemId) || !isLevelLocked;
+                const isAccessible = owned.includes(itemId) || !isLevelLocked || (isDevAccount && devModeEnabled);
                 const isActive = isAccessible && raidLoadout.vehicle === itemId;
 
                 return (
@@ -2015,7 +2418,7 @@ export default function ShopClient({
                   {RAID_TAG_ITEMS.map((itemId) => {
                     const reqLevel = ITEM_UNLOCK_LEVELS[itemId];
                     const isLevelLocked = reqLevel && xpLevel < reqLevel;
-                    const isAccessible = owned.includes(itemId) || !isLevelLocked;
+                    const isAccessible = owned.includes(itemId) || !isLevelLocked || (isDevAccount && devModeEnabled);
 
                     return (
                       <div key={itemId} className="relative">
@@ -2123,7 +2526,7 @@ export default function ShopClient({
                 if (itemId === "scouting_satellite" && !(acceptedMedium >= 10 || acceptedHard >= 5)) {
                   isLevelLocked = true;
                 }
-                const isAccessible = !isLevelLocked;
+                const isAccessible = !isLevelLocked || (isDevAccount && devModeEnabled);
                 
                 // Get inventory counts
                 const inventory = consumablesInventory.find(c => c.item_id === itemId);
@@ -2176,7 +2579,7 @@ export default function ShopClient({
             
             <div className="mt-4 p-4 border-[2px] border-dashed border-[#ffaa00]/30 bg-[#ffaa00]/5 text-center">
               <p className="text-[10px] text-muted normal-case italic">
-                Each offensive or defensive item has a strict global limit: 3 uses per player, per week. Defenses automatically equip while you're offline to block incoming Raids unless EMP'd. Use sabotage viruses and EMP devices wisely before executing a raid!
+                Each offensive or defensive item has a strict global limit: 3 uses per player, per week. Defenses automatically equip while you&apos;re offline to block incoming Raids unless EMP&apos;d. Use sabotage viruses and EMP devices wisely before executing a raid!
               </p>
             </div>
           </div>
@@ -2186,142 +2589,187 @@ export default function ShopClient({
         </div>
       )}
 
-      {/* ─── Point Shop Tab ─── */}
-      {activeTab === "points" && (
-        <div className="lg:flex lg:gap-6">
-          {/* Left column: Preview */}
-          <div className="lg:w-[360px] lg:shrink-0">
-            <div className="lg:sticky lg:top-6">
-              <ShopPreview
-                loadout={effectiveLoadout}
-                ownedFacesItems={ownedFacesItems}
-                customColor={previewColor ?? customColor}
-                ledBannerText={previewLedBannerText ?? ledBannerText}
-                billboardImages={previewBillboardImages ?? billboardImages}
-                buildingDims={buildingDims}
-                highlightItemId={highlightItem}
-              />
+      {/* ─── Relics Tab ─── */}
+      {activeTab === "relics" && (
+        <div className="max-w-[720px] mx-auto space-y-5 animate-[fade-in_0.3s_ease-out]">
+          <div className="border-[3px] border-border bg-bg-raised p-4 sm:p-6">
+            <div className="flex items-center justify-between border-b border-border/40 pb-3 mb-5">
+              <h3 className="text-sm font-bold tracking-wider" style={{ color: "#ffa116" }}>
+                RELIC VAULT
+              </h3>
+              <span className="text-[9px] text-muted normal-case font-bold">
+                CIRCULAR ARTIFACTS
+              </span>
             </div>
-          </div>
 
-          {/* Right column: Items */}
-          <div className="mt-5 lg:mt-0 min-w-0 flex-1 space-y-6">
-            <div className="border-[3px] border-border bg-bg-raised p-4">
-              <div className="flex items-center gap-3 mb-4">
-                <div
-                  className="w-10 h-10 flex items-center justify-center bg-bg-card border-[2px] border-border text-xl"
-                  style={{ color: ACCENT }}
-                >
-                  💎
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-cream">PREMIUM POINT SHOP</h3>
-                  <p className="text-[9px] text-muted normal-case">Redeem points for exclusive items and power-ups.</p>
-                </div>
+            {loadingRelics ? (
+              <div className="py-12 text-center text-xs text-muted">
+                <span className="blink-dot">Loading Vault...</span>
               </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
+                {/* Relics list */}
+                <div className="md:col-span-3 space-y-3">
+                  <p className="text-[8px] uppercase tracking-wider text-muted font-bold">Resonators</p>
+                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
+                    {relics.map((relic) => {
+                      const isEquipped = relic.id === equippedRelicId;
+                      const isSelected = relic.id === selectedRelic?.id;
+                      const eraTheme = ERA_THEMES[relic.era];
+                      const isLocked = relic.locked;
 
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-                {items.filter(item => item.price_points != null && item.price_points > 0).map(item => {
-                  const itemId = item.id;
-                  const isOwned = owned.includes(itemId);
-                  const isConsumable = itemId === "streak_freeze";
-                  const isMaxed = isConsumable && freezeCount >= 2;
-                  const canAfford = points >= (item.price_points ?? 0);
-                  const isBuying = buyingItem === itemId;
-                  const isConfirming = confirmBuyItem === itemId;
-
-                  let statusLabel = "";
-                  let statusColor = "#a0a0b0";
-
-                  if (isOwned && !isConsumable) {
-                    statusLabel = "OWNED";
-                    statusColor = ACCENT;
-                  } else if (isMaxed) {
-                    statusLabel = "MAXED";
-                    statusColor = "#ff4444";
-                  } else {
-                    statusLabel = `${item.price_points} [P]`;
-                    statusColor = canAfford ? "#39d353" : "#ff4444";
-                  }
-
-                  return (
-                    <div key={itemId} className="relative" data-buy-popover>
-                      <button
-                        onClick={() => {
-                          // Preview logic: if it's a building item, equip it for preview
-                          const zone = (Object.keys(ZONE_ITEMS) as (keyof Loadout)[]).find(z => ZONE_ITEMS[z].includes(itemId));
-                          if (zone) {
-                            handleEquip(zone, itemId);
-                          }
-                          setHighlightItem(itemId);
-
-                          if (isMaxed) return;
-                          if (isOwned && !isConsumable) return;
-                          setConfirmBuyItem(isConfirming ? null : itemId);
-                        }}
-                        disabled={isBuying || isMaxed}
-                        onMouseEnter={() => setHighlightItem(itemId)}
-                        onMouseLeave={() => setHighlightItem(null)}
-                        className={[
-                          "flex flex-col items-center justify-center p-2 transition-all w-full aspect-square",
-                          "border-[2px]",
-                          isOwned && !isConsumable ? "border-[#39d353] bg-[rgba(57,211,83,0.1)]" : "border-border bg-bg-card",
-                          isConfirming ? "border-cream" : "hover:border-border-light",
-                          (isOwned && !isConsumable) || isMaxed ? "opacity-60" : ""
-                        ].join(" ")}
-                      >
-                        <span className="text-3xl">{ITEM_EMOJIS[itemId] ?? "🎁"}</span>
-                        <span className="mt-1 text-[10px] text-cream truncate w-full text-center">
-                          {ITEM_NAMES[itemId] ?? itemId}
-                        </span>
-                        <span className="mt-0.5 text-[9px] font-bold" style={{ color: statusColor }}>
-                          {isBuying ? "..." : statusLabel}
-                        </span>
-                        {isConsumable && (
-                          <span className="mt-0.5 text-[8px] text-dim">{freezeCount}/2</span>
-                        )}
-                      </button>
-
-                      {/* Popover confirmation */}
-                      {isConfirming && (
-                        <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 z-30 w-36 border-[2px] border-border bg-bg p-2 shadow-lg text-center">
-                          <p className="text-[9px] text-cream mb-1.5">Redeem {ITEM_NAMES[itemId]}?</p>
-                          <p className="text-[10px] font-bold mb-2" style={{ color: "#39d353" }}>
-                            {item.price_points} Points
-                          </p>
-                          <div className="flex gap-1">
-                            <button
-                              onClick={(e) => { e.stopPropagation(); setConfirmBuyItem(null); }}
-                              className="flex-1 border-[2px] border-border py-1 text-[9px] text-muted hover:text-cream"
-                            >
-                              No
-                            </button>
-                            <button
-                              onClick={(e) => { e.stopPropagation(); setConfirmBuyItem(null); handleBuyWithPoints(itemId); }}
-                              disabled={!canAfford || isBuying}
-                              className="btn-press flex-1 py-1 text-[9px] text-bg disabled:opacity-40"
-                              style={{ backgroundColor: "#39d353", boxShadow: `1px 1px 0 0 #238636` }}
-                            >
-                              {isBuying ? "..." : "Yes"}
-                            </button>
+                      return (
+                        <div
+                          key={relic.id}
+                          onClick={() => setSelectedRelic(relic)}
+                          className="flex flex-col items-center gap-1.5 cursor-pointer group"
+                        >
+                          <div
+                            className={`relative flex h-14 w-14 items-center justify-center rounded-full border-[3px] transition-all duration-300 ${
+                              isSelected ? "scale-110 shadow-lg" : "hover:scale-105"
+                            } ${isLocked ? "opacity-60 saturate-50" : ""}`}
+                            style={{
+                              borderColor: isSelected ? "#ffa116" : (isLocked ? "#3f3f46" : eraTheme.border),
+                              background: isLocked ? "radial-gradient(circle, #18181b 0%, #09090b 100%)" : eraTheme.bg,
+                              boxShadow: isSelected
+                                ? `0 0 12px #ffa11680`
+                                : (isLocked ? "none" : `0 0 8px ${eraTheme.border}40`),
+                            }}
+                          >
+                            <div className="absolute inset-1 rounded-full border border-dashed border-white/20" />
+                            <span className="text-base" style={{ color: isLocked ? "#71717a" : eraTheme.border }}>
+                              {isLocked ? "🔒" : eraTheme.glyph}
+                            </span>
+                            {isEquipped && (
+                              <div
+                                className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full text-[8px] font-bold text-bg animate-pulse"
+                                style={{ backgroundColor: "#ffa116" }}
+                              >
+                                ✓
+                              </div>
+                            )}
                           </div>
-                          {!canAfford && <p className="mt-1.5 text-[8px] text-red-400 normal-case">Not enough points!</p>}
+                          <span
+                            className={`text-[8px] text-center tracking-wide truncate w-full font-bold ${
+                              isSelected ? "text-cream" : "text-muted group-hover:text-cream"
+                            }`}
+                          >
+                            {relic.name}
+                          </span>
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+                      );
+                    })}
+                  </div>
+                </div>
 
-            <div className="p-4 border-[2px] border-dashed border-border/40 bg-bg-card/50 text-center">
-              <p className="text-[10px] text-muted normal-case italic">
-                Earn points via daily check-ins (+5pts) and daily tasks (+15pts).
-              </p>
-            </div>
+                {/* Relic detail panel */}
+                <div className="md:col-span-2 border-[2px] border-border bg-bg/50 p-4 flex flex-col justify-between">
+                  {selectedRelic ? (
+                    <div className="h-full flex flex-col justify-between">
+                      <div className="space-y-4">
+                        <div className="flex items-center gap-2">
+                          <div
+                            className={`flex h-12 w-12 items-center justify-center rounded-full border-[3px] flex-shrink-0 ${selectedRelic.locked ? "opacity-60 saturate-50" : ""}`}
+                            style={{
+                              borderColor: selectedRelic.locked ? "#3f3f46" : ERA_THEMES[selectedRelic.era].border,
+                              background: selectedRelic.locked ? "radial-gradient(circle, #18181b 0%, #09090b 100%)" : ERA_THEMES[selectedRelic.era].bg,
+                            }}
+                          >
+                            <span className="text-base" style={{ color: selectedRelic.locked ? "#71717a" : ERA_THEMES[selectedRelic.era].border }}>
+                              {selectedRelic.locked ? "🔒" : ERA_THEMES[selectedRelic.era].glyph}
+                            </span>
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-1.5">
+                              <div
+                                className="text-[8px] font-bold px-1.5 py-0.5 rounded-sm inline-block"
+                                style={{
+                                  backgroundColor: selectedRelic.locked ? "#27272a" : ERA_THEMES[selectedRelic.era].border + "22",
+                                  color: selectedRelic.locked ? "#71717a" : ERA_THEMES[selectedRelic.era].border,
+                                  border: `1px solid ${selectedRelic.locked ? "#3f3f46" : ERA_THEMES[selectedRelic.era].border + "40"}`,
+                                }}
+                              >
+                                {selectedRelic.era.toUpperCase()} ERA
+                              </div>
+                              {selectedRelic.locked && (
+                                <div className="text-[8px] font-bold px-1.5 py-0.5 rounded-sm inline-block bg-red-500/10 text-red-400 border border-red-500/20 tracking-wider">
+                                  LOCKED
+                                </div>
+                              )}
+                            </div>
+                            <h4 className="text-[10px] font-bold text-cream mt-0.5">{selectedRelic.name}</h4>
+                          </div>
+                        </div>
+
+                        {selectedRelic.description && (
+                          <div className="space-y-1">
+                            <p className="text-[9px] italic leading-relaxed text-cream/90 normal-case">
+                              &quot;{selectedRelic.description}&quot;
+                            </p>
+                          </div>
+                        )}
+
+                        <div className="space-y-1">
+                          <span className="text-[8px] text-muted font-bold tracking-wider">ABILITIES</span>
+                          <p className="text-[9px] leading-relaxed text-cream normal-case font-medium">
+                            {selectedRelic.abilities}
+                          </p>
+                        </div>
+
+                        <div className="space-y-1">
+                          <span className="text-[8px] text-muted font-bold tracking-wider">HOW TO ACHIEVE</span>
+                          <p className="text-[9px] leading-relaxed text-cream normal-case font-medium">
+                            {selectedRelic.howToAchieve}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 pt-3 border-t border-border/30">
+                        {selectedRelic.locked ? (
+                          <button
+                            disabled
+                            className="w-full py-2 text-center text-[9px] text-muted border-[2px] border-border bg-bg/20 cursor-not-allowed opacity-50 font-bold"
+                          >
+                            LOCKED
+                          </button>
+                        ) : equippedRelicId === selectedRelic.id ? (
+                          <button
+                            onClick={() => handleEquipRelic(null)}
+                            disabled={equippingRelic !== null}
+                            className="btn-press w-full py-2 text-center text-[9px] text-cream border-[2px] border-red-500/60 hover:bg-red-500/10 transition-colors disabled:opacity-50"
+                          >
+                            {equippingRelic === "unequip" ? "UNEQUIPPING..." : "UNEQUIP RELIC"}
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleEquipRelic(selectedRelic.id)}
+                            disabled={equippingRelic !== null}
+                            className="btn-press w-full py-2 text-center text-[9px] text-bg font-bold transition-all disabled:opacity-50"
+                            style={{
+                              backgroundColor: "#ffa116",
+                              boxShadow: `2px 2px 0 0 ${SHADOW}`,
+                            }}
+                          >
+                            {equippingRelic ? "EQUIPPING..." : "EQUIP RELIC"}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="h-full flex items-center justify-center text-[9px] text-muted">
+                      No relic selected
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
+          <p className="text-center text-[10px] text-dim normal-case">
+            Equipping relics grants active abilities.
+          </p>
         </div>
       )}
+
     </>
   );
 }

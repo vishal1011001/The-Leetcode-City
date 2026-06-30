@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/supabase-server";
 import { getSupabaseAdmin } from "@/lib/supabase";
-import { levelFromXp } from "@/lib/xp";
 
 /**
  * @param {import('next/server').NextRequest} req
@@ -20,8 +19,8 @@ export async function POST(req: Request) {
     }
 
     const sb = getSupabaseAdmin();
-    
-    // First, verify the user has a linked developer account
+
+    // Verify the user has a linked developer account
     const { data: dev } = await sb
       .from("developers")
       .select("id, xp_total")
@@ -29,13 +28,16 @@ export async function POST(req: Request) {
       .single();
 
     if (!dev) {
-      return NextResponse.json({ error: "You must link a LeetCode account first." }, { status: 403 });
+      return NextResponse.json(
+        { error: "You must link a LeetCode account first." },
+        { status: 403 }
+      );
     }
 
-    // Attempt to find the code in the xp_redeem_codes table
+    // Fetch and validate the code
     const { data: redeemCode, error: fetchError } = await sb
       .from("xp_redeem_codes")
-      .select("*")
+      .select("id, xp_amount, max_uses, used_count, expires_at")
       .eq("code", code.trim().toUpperCase())
       .single();
 
@@ -43,60 +45,97 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid or expired code." }, { status: 404 });
     }
 
-    // Check expiration
+    // Check expiration (safe to do pre-RPC — expiry is immutable)
     if (redeemCode.expires_at && new Date(redeemCode.expires_at) < new Date()) {
       return NextResponse.json({ error: "This code has expired." }, { status: 410 });
     }
 
-    // Check usage limits
+    // Check if already exhausted (fast pre-check — avoids RPC call for
+    // obviously exhausted codes; DB-level guard is the authoritative check)
     if (redeemCode.max_uses !== -1 && redeemCode.used_count >= redeemCode.max_uses) {
-      return NextResponse.json({ error: "This code has already reached its maximum usage limit." }, { status: 410 });
+      return NextResponse.json(
+        { error: "This code has already reached its maximum usage limit." },
+        { status: 410 }
+      );
     }
 
-    // Check if the user already redeemed this code
-    // (We'll store usage in a new table to track who redeemed what if we need strict 1 per user,
-    // but for now we just rely on total uses limit or add a simple check in a mapping table)
-    const { data: existingUsage } = await sb
-      .from("xp_code_usages")
-      .select("id")
-      .eq("code_id", redeemCode.id)
-      .eq("developer_id", dev.id)
-      .maybeSingle();
-
-    if (existingUsage) {
-       return NextResponse.json({ error: "You have already redeemed this code." }, { status: 409 });
-    }
-
-    // Apply XP to developer and recalculate level
-    const xpAmount = redeemCode.xp_amount;
-    const newXpTotal = (dev.xp_total ?? 0) + xpAmount;
-    const newLevel = levelFromXp(newXpTotal);
-
-    const { error: xpError } = await sb
-      .from("developers")
-      .update({ xp_total: newXpTotal, xp_level: newLevel })
-      .eq("id", dev.id);
-
-    if (xpError) {
-      return NextResponse.json({ error: "Failed to apply XP. Please try again later." }, { status: 500 });
-    }
-
-    // Record the usage for this specific user
-    await sb.from("xp_code_usages").insert({
-      code_id: redeemCode.id,
-      developer_id: dev.id
+    // ── Atomic redemption via RPC ─────────────────────────────────────
+    // redeem_xp_code() does three things atomically:
+    //   1. INSERT xp_code_usages ON CONFLICT DO NOTHING — per-user CAS
+    //   2. UPDATE xp_redeem_codes SET used_count = used_count + 1
+    //      WHERE used_count < max_uses — atomic cap-safe increment
+    //   3. Returns ok + error_code so we only grant XP if both passed
+    //
+    // XP is applied AFTER the RPC succeeds — usage is recorded first,
+    // so a failure in XP update cannot leave an unredeemed code slot.
+    const { data: rpcResult, error: rpcError } = await sb.rpc("redeem_xp_code", {
+      p_code_id:      redeemCode.id,
+      p_developer_id: dev.id,
+      p_xp_amount:    redeemCode.xp_amount,
+      p_max_uses:     redeemCode.max_uses,
     });
 
-    // Update the code's global usage count
-    const newUsedCount = redeemCode.used_count + 1;
-    const fullyUsed = redeemCode.max_uses !== -1 && newUsedCount >= redeemCode.max_uses;
+    if (rpcError) {
+      console.error("[redeem-xp] redeem_xp_code RPC error:", rpcError.message);
+      return NextResponse.json(
+        { error: "Redemption failed. Please try again later." },
+        { status: 500 }
+      );
+    }
 
-    if (fullyUsed) {
-      // If code is exhausted, we can delete it (or keep it as reference)
-      // I'll leave it in DB since `xp_code_usages` references it, just rely on used_count check
-      await sb.from("xp_redeem_codes").update({ used_count: newUsedCount }).eq("id", redeemCode.id);
+    const result = rpcResult?.[0];
+
+    if (!result?.ok) {
+      const errorMap: Record<string, { error: string; status: number }> = {
+        already_redeemed: {
+          error: "You have already redeemed this code.",
+          status: 409,
+        },
+        exhausted: {
+          error: "This code has already reached its maximum usage limit.",
+          status: 410,
+        },
+      };
+      const mapped = errorMap[result?.error_code] ?? {
+        error: "Code could not be redeemed.",
+        status: 409,
+      };
+      return NextResponse.json({ error: mapped.error }, { status: mapped.status });
+    }
+
+    // ── Apply XP — only reached if RPC won the race ───────────────────
+    const xpAmount = result.xp_amount;
+    const { data: xpResult, error: xpError } = await sb.rpc("grant_xp_atomic", {
+      p_developer_id: dev.id,
+      p_source: `xp_code:${redeemCode.id}`,
+      p_amount: xpAmount,
+    });
+
+    if (xpError) {
+      console.error("[redeem-xp] grant_xp_atomic failed after successful redemption:", xpError.message);
+      return NextResponse.json(
+        { error: "Code was redeemed but XP could not be applied. Contact support." },
+        { status: 500 }
+      );
+    }
+
+    let newXpTotal: number;
+    let newLevel: number;
+    if (xpResult) {
+     const grant = xpResult as { granted: number; new_total: number; new_level: number };
+      newXpTotal = grant.new_total;
+      newLevel = grant.new_level;
     } else {
-      await sb.from("xp_redeem_codes").update({ used_count: newUsedCount }).eq("id", redeemCode.id);
+      console.warn(
+        `[redeem-xp] grant_xp_atomic returned null (duplicate source key) for dev ${dev.id}, code ${redeemCode.id}`
+      );
+      const { data: refreshed } = await sb
+        .from("developers")
+        .select("xp_total, xp_level")
+        .eq("id", dev.id)
+        .single();
+      newXpTotal = refreshed?.xp_total ?? dev.xp_total ?? 0;
+      newLevel = refreshed?.xp_level ?? 1;
     }
 
     return NextResponse.json({

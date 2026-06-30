@@ -19,6 +19,7 @@ export default function LivePage() {
 
   useEffect(() => {
     const fetchPresence = () => {
+      if (typeof document !== "undefined" && document.hidden) return;
       fetch("/api/presence")
         .then((r) => r.json())
         .then((data) => {
@@ -53,7 +54,7 @@ export default function LivePage() {
             &larr; Back to city
           </Link>
           <div className="flex items-center gap-3">
-            <span className="live-dot h-3 w-3 rounded-full bg-[#4ade80]" />
+            <span className="live-dot h-3 w-3 rounded-full bg-[#4ade80]" aria-hidden="true" />
             <h1 className="text-2xl text-cream">Live Now</h1>
             <span className="text-xs text-muted">
               {developers.length} developer{developers.length !== 1 ? "s" : ""} coding
@@ -96,7 +97,9 @@ export default function LivePage() {
                     />
                     <span
                       className={`absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-bg ${isCreator ? "bg-[#fbbf24]" : "bg-[#4ade80]"}`}
+                      aria-hidden="true"
                     />
+                    <span className="sr-only">live</span>
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">

@@ -20,7 +20,6 @@ export async function POST(req: Request) {
 
     const sb = getSupabaseAdmin();
 
-    // Verify the user has a linked developer account
     const { data: dev } = await sb
       .from("developers")
       .select("id, github_login")
@@ -31,7 +30,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "You must link a LeetCode account first." }, { status: 403 });
     }
 
-    // Look up the code
     const { data: specialCode, error: fetchError } = await sb
       .from("special_codes")
       .select("*")
@@ -42,17 +40,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid or expired code." }, { status: 404 });
     }
 
-    // Check expiry
     if (specialCode.expires_at && new Date(specialCode.expires_at) < new Date()) {
       return NextResponse.json({ error: "This code has expired." }, { status: 410 });
     }
 
-    // Check max uses
     if (specialCode.max_uses !== -1 && specialCode.used_count >= specialCode.max_uses) {
       return NextResponse.json({ error: "This code has reached its maximum usage limit." }, { status: 410 });
     }
 
-    // Check if this user already redeemed this code
     const { data: existingUsage } = await sb
       .from("special_code_usages")
       .select("id")
@@ -64,9 +59,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "You have already redeemed this code." }, { status: 409 });
     }
 
-    // ── Handle "all_items" type ──────────────────────────────
     if (specialCode.type === "all_items") {
-      // Fetch all active items
       const { data: allItems } = await sb
         .from("items")
         .select("id, name")
@@ -76,46 +69,69 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "No items found to grant." }, { status: 500 });
       }
 
-      // Find items user doesn't already own
       const { data: ownedRows } = await sb
         .from("purchases")
         .select("item_id")
         .eq("developer_id", dev.id)
         .is("gifted_to", null)
-        .eq("status", "completed");
+        .in("status", ["completed", "delivered"]);
 
       const alreadyOwned = new Set((ownedRows ?? []).map(r => r.item_id));
       const toGrant = allItems.filter(i => !alreadyOwned.has(i.id));
 
       if (toGrant.length > 0) {
-        const inserts = toGrant.map(item => ({
-          developer_id: dev.id,
-          item_id: item.id,
-          provider: "free",
-          provider_tx_id: `special_code_${specialCode.id}_${dev.id}_${item.id}`,
-          amount_cents: 0,
-          currency: "usd",
-          status: "completed",
-        }));
+        const itemIds = toGrant.map(i => i.id);
 
-        const { error: insertErr } = await sb.from("purchases").insert(inserts);
-        if (insertErr) {
-          console.error("[redeem-special] insert error:", insertErr);
+        const { error: rpcError } = await sb.rpc("redeem_special_all_items", {
+          p_code_id: specialCode.id,
+          p_dev_id: dev.id,
+          p_item_ids: itemIds,
+          p_expected_used_count: specialCode.used_count,
+        });
+
+        if (rpcError) {
+          if (rpcError.message?.includes("23505") || rpcError.message?.includes("duplicate")) {
+            return NextResponse.json({ error: "You have already redeemed this code." }, { status: 409 });
+          }
+          console.error("[redeem-special] RPC error:", rpcError);
           return NextResponse.json({ error: "Failed to grant items. Please try again." }, { status: 500 });
         }
+      } else {
+        const { error: usageInsertErr } = await sb
+          .from("special_code_usages")
+          .insert({
+            code_id: specialCode.id,
+            developer_id: dev.id,
+          });
+
+        if (usageInsertErr) {
+          if (usageInsertErr.code?.includes("23505")) {
+            return NextResponse.json({ error: "You have already redeemed this code." }, { status: 409 });
+          }
+          console.error("[redeem-special] usage insert error:", usageInsertErr);
+          return NextResponse.json({ error: "Failed to redeem code. Please try again." }, { status: 500 });
+        }
+
+        const { data: updatedCode, error: updateErr } = await sb
+          .from("special_codes")
+          .update({ used_count: specialCode.used_count + 1 })
+          .eq("id", specialCode.id)
+          .eq("used_count", specialCode.used_count)
+          .select("id");
+
+        if (updateErr || !updatedCode || updatedCode.length === 0) {
+          await sb
+            .from("special_code_usages")
+            .delete()
+            .eq("code_id", specialCode.id)
+            .eq("developer_id", dev.id);
+
+          return NextResponse.json(
+            { error: "Code could not be redeemed. Please try again." },
+            { status: 409 }
+          );
+        }
       }
-
-      // Record the usage
-      await sb.from("special_code_usages").insert({
-        code_id: specialCode.id,
-        developer_id: dev.id,
-      });
-
-      // Bump used_count
-      await sb
-        .from("special_codes")
-        .update({ used_count: specialCode.used_count + 1 })
-        .eq("id", specialCode.id);
 
       const grantedIds = toGrant.map(i => i.id);
 
@@ -124,8 +140,8 @@ export async function POST(req: Request) {
         type: "all_items",
         granted_items: grantedIds,
         message: toGrant.length > 0
-          ? `🎁 Unlocked ${toGrant.length} item${toGrant.length !== 1 ? "s" : ""}! Head to your shop to equip them.`
-          : `✅ You already own everything in the shop!`,
+          ? `Unlocked ${toGrant.length} item${toGrant.length !== 1 ? "s" : ""}! Head to your shop to equip them.`
+          : "You already own everything in the shop!",
       });
     }
 

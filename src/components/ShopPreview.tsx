@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useMemo } from "react";
+import { useRef, useMemo, useCallback, useEffect, useState } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
@@ -219,11 +219,55 @@ function ShopPreviewScene({
     return null;
   }, [highlightItemId, customColor]);
 
-  // City-matching per-face textures (regenerated when custom color changes)
+  // City-matching per-face textures (regenerated when shape or face color changes).
+  // Canvas drawing happens synchronously here so textures are never blank on first render.
   const textures = useMemo(() => {
     const seed = 42 * 137; // deterministic for preview
-    const front = createPreviewWindowTexture(floors, windowsPerFloor, seed, faceColor);
-    const side = createPreviewWindowTexture(floors, sideWindowsPerFloor, seed + 7919, faceColor);
+    const WS = 6;
+    const GAP = 2;
+    const PAD = 3;
+    const litPct = 0.65;
+
+    const drawCanvas = (rCount: number, cCount: number, seedVal: number) => {
+      const w = PAD * 2 + cCount * WS + Math.max(0, cCount - 1) * GAP;
+      const h = PAD * 2 + rCount * WS + Math.max(0, rCount - 1) * GAP;
+
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d")!;
+
+      ctx.fillStyle = faceColor || THEME.face;
+      ctx.fillRect(0, 0, w, h);
+
+      let s = seedVal;
+      const rand = () => {
+        s = (s * 16807) % 2147483647;
+        return (s - 1) / 2147483646;
+      };
+
+      for (let r = 0; r < rCount; r++) {
+        for (let c = 0; c < cCount; c++) {
+          const x = PAD + c * (WS + GAP);
+          const y = PAD + r * (WS + GAP);
+          if (rand() < litPct) {
+            ctx.fillStyle = THEME.windowLit[Math.floor(rand() * THEME.windowLit.length)];
+          } else {
+            ctx.fillStyle = THEME.windowOff;
+          }
+          ctx.fillRect(x, y, WS, WS);
+        }
+      }
+
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.magFilter = THREE.NearestFilter;
+      tex.minFilter = THREE.NearestFilter;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    };
+
+    const front = drawCanvas(floors, windowsPerFloor, seed);
+    const side = drawCanvas(floors, sideWindowsPerFloor, seed + 7919);
     return { front, side };
   }, [floors, windowsPerFloor, sideWindowsPerFloor, faceColor]);
 
@@ -251,6 +295,23 @@ function ShopPreviewScene({
     const front = makeFace(textures.front);
     return [side, side, roof, roof, front, front];
   }, [textures]);
+
+  // Cleanup textures on unmount or dimension changes
+  useEffect(() => {
+    return () => {
+      textures.front.dispose();
+      textures.side.dispose();
+    };
+  }, [textures]);
+
+  // Cleanup materials on unmount or dimension changes
+  useEffect(() => {
+    return () => {
+      for (const mat of materials) {
+        mat.dispose();
+      }
+    };
+  }, [materials]);
 
   // Gentle idle bob
   useFrame((state) => {
@@ -382,13 +443,19 @@ export default function ShopPreview({
   highlightItemId?: string | null;
   buildingStyle?: string;
 }) {
+  const [canvasKey, setCanvasKey] = useState(0);
+
   // Clamp building dims for preview (cap height, ensure min width/depth)
   const raw = buildingDims ?? DEFAULT_DIMS;
+  const rawWidth = raw.width && !isNaN(raw.width) ? raw.width : DEFAULT_DIMS.width;
+  const rawHeight = raw.height && !isNaN(raw.height) ? raw.height : DEFAULT_DIMS.height;
+  const rawDepth = raw.depth && !isNaN(raw.depth) ? raw.depth : DEFAULT_DIMS.depth;
+
   const isBungalow = buildingStyle === "bungalow";
   const dims: BuildingDims = {
-    width: Math.max(18, isBungalow ? raw.width * 2.5 : raw.width),
-    height: Math.min(isBungalow ? 15 : 55, Math.max(30, raw.height)),
-    depth: Math.max(14, raw.depth),
+    width: Math.max(18, isBungalow ? rawWidth * 2.5 : rawWidth),
+    height: Math.min(isBungalow ? 15 : 55, Math.max(30, rawHeight)),
+    depth: Math.max(14, rawDepth),
   };
   const camDist = isBungalow
     ? Math.max(100, dims.width * 2)
@@ -398,6 +465,16 @@ export default function ShopPreview({
     <div className="relative border-[3px] border-border" style={{ backgroundColor: THEME.fogColor }}>
       <div className="h-[280px] sm:h-[360px] lg:h-[520px]">
         <Canvas
+          key={canvasKey}
+          onCreated={({ gl }) => {
+            const canvas = gl.domElement;
+            const handleContextLost = (e: Event) => {
+              e.preventDefault();
+              console.warn("ShopPreview WebGL context lost. Recreating canvas context.");
+              setCanvasKey((prev) => prev + 1);
+            };
+            canvas.addEventListener("webglcontextlost", handleContextLost);
+          }}
           camera={{
             position: isBungalow ? [0, camDist * 0.4, camDist * 1.2] : [camDist * 0.5, camDist * 0.3, camDist * 0.7],
             fov: 45,

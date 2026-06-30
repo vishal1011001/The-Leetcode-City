@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
-import { autoEquipIfSolo } from "@/lib/items";
+import { autoEquipIfSolo, fulfillItemPurchase } from "@/lib/items";
 import { sendPurchaseNotification, sendGiftSentNotification } from "@/lib/notification-senders/purchase";
 import { sendGiftReceivedNotification } from "@/lib/notification-senders/gift";
 import { SKY_AD_PLANS, isValidPlanId } from "@/lib/skyAdPlans";
+import { verifyAbacatePayWebhook } from "@/lib/abacatepay";
+import { InfrastructureError } from "@/lib/errors";
 
 export const dynamic = "force-dynamic";
 
@@ -19,15 +21,13 @@ function extractPixId(data: any): string | undefined {
  * @param {import('next/server').NextRequest} request
  */
 export async function POST(request: Request) {
-  // Layer 1: Validate webhook secret via query string
-  const expectedSecret = process.env.ABACATEPAY_WEBHOOK_SECRET;
-  if (!expectedSecret) {
+  // Layer 1: Validate webhook token via header (not query string)
+  if (!process.env.ABACATEPAY_WEBHOOK_SECRET) {
     console.error("ABACATEPAY_WEBHOOK_SECRET is not set");
     return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
   }
-  const { searchParams } = new URL(request.url);
-  const receivedSecret = searchParams.get("webhookSecret");
-  if (receivedSecret !== expectedSecret) {
+  const receivedToken = request.headers.get("x-webhook-token");
+  if (!verifyAbacatePayWebhook(receivedToken)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -47,6 +47,18 @@ export async function POST(request: Request) {
       case "billing.paid":
       case "pixQrCode.paid": {
         if (!pixId) break;
+
+        // Idempotency check using pix_id as idempotency key
+        const idempotencyKey = `abacatepay_${pixId}`;
+        const { data: existingIdem } = await sb
+          .from("purchases")
+          .select("id")
+          .eq("idempotency_key", idempotencyKey)
+          .maybeSingle();
+        if (existingIdem) {
+          console.log(`[AbacatePay webhook] Duplicate event for ${pixId}, skipping`);
+          break;
+        }
 
         // --- Sky Ad purchase ---
         const { data: ad } = await sb
@@ -69,7 +81,8 @@ export async function POST(request: Request) {
                 starts_at: now.toISOString(),
                 ends_at: endsAt.toISOString(),
               })
-              .eq("id", ad.id);
+              .eq("id", ad.id)
+              .eq("active", false);
 
             if (plan.vehicle === "plane") {
               await sb
@@ -85,22 +98,36 @@ export async function POST(request: Request) {
         // --- Shop item purchase ---
         const { data: purchase } = await sb
           .from("purchases")
-          .select("id, status")
+          .select("id, status, developer_id, item_id, gifted_to")
           .eq("provider_tx_id", pixId)
           .eq("provider", "abacatepay")
           .maybeSingle();
 
         if (purchase && purchase.status === "pending") {
+          // Atomic claim: transition pending → processing in one UPDATE.
+          // If a concurrent PIX retry already claimed it, claimed will be null.
+          const { data: claimed } = await sb
+            .from("purchases")
+            .update({ status: "processing" })
+            .eq("id", purchase.id)
+            .eq("status", "pending")
+            .select("id")
+            .maybeSingle();
+
+          if (!claimed) {
+            console.log(`[AbacatePay webhook] Purchase ${purchase.id} already claimed by concurrent request — skipping`);
+            break;
+          }
+
+          const ownerId = purchase.gifted_to ?? purchase.developer_id;
+          const { status: purchaseStatus } = await fulfillItemPurchase(ownerId, purchase.item_id, sb);
+
           await sb
             .from("purchases")
-            .update({ status: "completed" })
+            .update({ status: purchaseStatus, idempotency_key: idempotencyKey })
             .eq("id", purchase.id);
 
-          const { data: fullPurchase } = await sb
-            .from("purchases")
-            .select("developer_id, item_id, gifted_to")
-            .eq("id", purchase.id)
-            .single();
+          const fullPurchase = purchase;
 
           if (fullPurchase) {
             const itemOwner = fullPurchase.gifted_to ?? fullPurchase.developer_id;
@@ -161,9 +188,12 @@ export async function POST(request: Request) {
       }
     }
   } catch (err) {
-    console.error("AbacatePay webhook handler error:", err);
+    if (err instanceof InfrastructureError) {
+      console.error("[AbacatePay webhook] Infrastructure error, returning 500 for retry:", err.message, err.cause);
+      return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    }
+    console.error("[AbacatePay webhook] Business logic or unexpected error:", err);
   }
 
-  // Always return 200
   return NextResponse.json({ received: true });
 }

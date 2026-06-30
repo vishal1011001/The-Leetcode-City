@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/supabase-server";
 import { getSupabaseAdmin } from "@/lib/supabase";
+import { grantFreeClaimItem } from "@/lib/items";
 
 export async function POST() {
   const supabase = await createServerSupabase();
@@ -50,7 +51,7 @@ export async function POST() {
       claimed_at: new Date().toISOString(),
       fetch_priority: 1,
     })
-    .eq("github_login", githubLogin)
+    .ilike("github_login", githubLogin)
     .eq("claimed", false)
     .is("claimed_by", null)
     .select("github_login")
@@ -67,10 +68,11 @@ export async function POST() {
   const { data: dev } = await admin
     .from("developers")
     .select("id")
-    .eq("github_login", githubLogin)
+    .eq("claimed_by", user.id)
     .single();
 
-  if (dev) {
+  if (dev) { 
+    await grantFreeClaimItem(dev.id);  
     await admin.from("activity_feed").insert({
       event_type: "building_claimed",
       actor_id: dev.id,

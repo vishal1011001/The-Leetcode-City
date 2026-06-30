@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
+import { serializeDeveloper } from "@/lib/serialize";
 
 const STORAGE_BUCKET = "city-data";
 const STORAGE_PATH = "snapshot.json";
@@ -37,6 +38,9 @@ async function fetchAll<T>(
  */
 export async function GET(request: NextRequest) {
   const auth = request.headers.get("authorization");
+  if (!process.env.CRON_SECRET) {
+    return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
+  }
   if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -53,27 +57,27 @@ export async function GET(request: NextRequest) {
       fetchAll<Record<string, any>>(
         sb,
         "developers",
-        "id, github_login, name, avatar_url, contributions, total_stars, public_repos, primary_language, rank, claimed, kudos_count, visit_count, contributions_total, contribution_years, total_prs, total_reviews, repos_contributed_to, followers, following, organizations_count, account_created_at, current_streak, active_days_last_year, language_diversity, app_streak, rabbit_completed, district, district_chosen, xp_total, xp_level",
+        "id, github_login, name, avatar_url, contributions, total_stars, public_repos, primary_language, rank, claimed, kudos_count, visit_count, contributions_total, contribution_years, total_prs, total_reviews, repos_contributed_to, followers, following, organizations_count, account_created_at, current_streak, active_days_last_year, language_diversity, app_streak, rabbit_completed, district, district_chosen, xp_total, xp_level, raid_xp",
         undefined,
         "rank",
       ),
-      fetchAll<{ developer_id: number; item_id: string }>(
+      fetchAll<{ developer_id: number; item_id: string; provider: string; amount_cents: number }>(
         sb,
         "purchases",
-        "developer_id, item_id",
+        "developer_id, item_id, provider, amount_cents",
         (q) => q.is("gifted_to", null).eq("status", "completed"),
       ),
-      fetchAll<{ gifted_to: number; item_id: string }>(
+      fetchAll<{ gifted_to: number; item_id: string; provider: string; amount_cents: number }>(
         sb,
         "purchases",
-        "gifted_to, item_id",
+        "gifted_to, item_id, provider, amount_cents",
         (q) => q.not("gifted_to", "is", null).eq("status", "completed"),
       ),
       fetchAll<{ developer_id: number; item_id: string; config: Record<string, unknown> }>(
         sb,
         "developer_customizations",
         "developer_id, item_id, config",
-        (q) => q.in("item_id", ["custom_color", "billboard", "loadout", "led_banner"]),
+        (q) => q.in("item_id", ["custom_color", "billboard", "loadout", "building_style", "led_banner"]),
       ),
       fetchAll<{ developer_id: number; achievement_id: string }>(
         sb,
@@ -92,9 +96,15 @@ export async function GET(request: NextRequest) {
   // Build owned items map
   const ownedItemsMap: Record<number, string[]> = {};
   for (const row of purchases) {
+    if (row.amount_cents === 0 && ["stripe", "cashfree", "abacatepay", "nowpayments"].includes(row.provider)) {
+      continue;
+    }
     (ownedItemsMap[row.developer_id] ??= []).push(row.item_id);
   }
   for (const row of giftPurchases) {
+    if (row.amount_cents === 0 && ["stripe", "cashfree", "abacatepay", "nowpayments"].includes(row.provider)) {
+      continue;
+    }
     (ownedItemsMap[row.gifted_to] ??= []).push(row.item_id);
   }
 
@@ -103,6 +113,7 @@ export async function GET(request: NextRequest) {
   const billboardImagesMap: Record<number, string[]> = {};
   const ledBannerTextMap: Record<number, string> = {};
   const loadoutMap: Record<number, { crown: string | null; roof: string | null; aura: string | null; faces: string | null }> = {};
+  const styleMap: Record<number, string> = {};
   for (const row of customizations) {
     const config = row.config;
     if (row.item_id === "custom_color" && typeof config?.color === "string") {
@@ -122,6 +133,9 @@ export async function GET(request: NextRequest) {
         aura: (config?.aura as string) ?? null,
         faces: (config?.faces as string) ?? null,
       };
+    }
+    if (row.item_id === "building_style" && typeof config?.style === "string") {
+      styleMap[row.developer_id] = config.style as string;
     }
     if (row.item_id === "led_banner" && typeof config?.text === "string") {
       ledBannerTextMap[row.developer_id] = config.text as string;
@@ -145,7 +159,7 @@ export async function GET(request: NextRequest) {
   }
 
   // Merge
-  const developers = devs.map((dev) => ({
+  const developers = devs.map((dev) => serializeDeveloper({
     ...dev,
     kudos_count: dev.kudos_count ?? 0,
     visit_count: dev.visit_count ?? 0,
@@ -155,6 +169,7 @@ export async function GET(request: NextRequest) {
     led_banner_text: ledBannerTextMap[dev.id] ?? null,
     achievements: achievementsMap[dev.id] ?? [],
     loadout: loadoutMap[dev.id] ?? null,
+    building_style: styleMap[dev.id] ?? "tower",
     app_streak: dev.app_streak ?? 0,
     raid_xp: dev.raid_xp ?? 0,
     current_week_contributions: dev.current_week_contributions ?? 0,

@@ -1,11 +1,13 @@
 "use client";
 
-import { useCallback, useOptimistic, useState, useTransition } from "react";
+import { useCallback, useOptimistic, useState, useTransition, useEffect, useRef } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { createBrowserSupabase } from "@/lib/supabase";
 import { ROADMAP_PHASES, VOTABLE_ITEM_IDS } from "@/lib/roadmap-data";
 import type { RoadmapPhase, RoadmapItem, ItemStatus } from "@/lib/roadmap-data";
 import { toggleVote } from "./actions";
+import { performVoteWithRollback } from "./vote-helper";
 
 const ACCENT = "#ffa116";
 const CREAM = "#e8dcc8";
@@ -90,9 +92,9 @@ export default function RoadmapClient({
           <h1 className="text-3xl text-cream md:text-4xl">
             Road<span style={{ color: ACCENT }}>map</span>
           </h1>
-          <p className="mt-3 text-xs text-muted normal-case">
-            What we've built, what we're building, and what's coming next
-          </p>
+            <p className="mt-3 text-xs text-muted normal-case">
+              What we&apos;ve built, what we&apos;re building, and what&apos;s coming next
+            </p>
         </div>
 
         {/* Progress bar */}
@@ -257,10 +259,11 @@ function ItemRow({
   onSignInPrompt: () => void;
 }) {
   const [isPending, startTransition] = useTransition();
+  const router = useRouter();
 
   const [optimistic, setOptimistic] = useOptimistic(
     { votes: initialVotes, hasVoted: initialHasVoted },
-    (state, _action: "toggle") => ({
+    (state) => ({
       votes: state.hasVoted ? state.votes - 1 : state.votes + 1,
       hasVoted: !state.hasVoted,
     })
@@ -272,8 +275,10 @@ function ItemRow({
       return;
     }
     startTransition(async () => {
-      setOptimistic("toggle");
-      await toggleVote(item.id);
+      await performVoteWithRollback({ setOptimistic, toggleVoteFn: toggleVote, itemId: item.id });
+      // After successful server update and server-side revalidation,
+      // refresh client to fetch canonical server props.
+      router.refresh();
     });
   }
 
@@ -289,9 +294,15 @@ function ItemRow({
       {/* Checkbox */}
       <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center border-[2px] border-border text-[8px]">
         {isDone ? (
-          <span style={{ color: "#4ade80" }}>&#10003;</span>
+          <>
+            <span style={{ color: "#4ade80" }} aria-hidden="true">&#10003;</span>
+            <span className="sr-only">Completed</span>
+          </>
         ) : item.status === "building" ? (
-          <span className="blink-dot block h-1.5 w-1.5" style={{ backgroundColor: ACCENT }} />
+          <>
+            <span className="blink-dot block h-1.5 w-1.5" style={{ backgroundColor: ACCENT }} aria-hidden="true" />
+            <span className="sr-only">Building</span>
+          </>
         ) : null}
       </span>
 
@@ -338,16 +349,55 @@ function ItemRow({
 }
 
 /* ─── Sign In Prompt ─── */
-function SignInPrompt({ onClose, onSignIn }: { onClose: () => void; onSignIn: () => void }) {
+export function SignInPrompt({ onClose, onSignIn }: { onClose: () => void; onSignIn: () => void }) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const firstButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    const prev = document.activeElement as HTMLElement | null;
+
+    // Focus the first actionable element in the dialog for keyboard users
+    const timer = setTimeout(() => {
+      firstButtonRef.current?.focus();
+    }, 0);
+
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      }
+    }
+
+    document.addEventListener("keydown", onKey);
+
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("keydown", onKey);
+      // restore focus
+      try {
+        prev?.focus?.();
+      } catch (err) {
+        // ignore
+      }
+    };
+  }, [onClose]);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-      <div className="w-full max-w-xs border-[3px] border-border bg-bg-raised p-6 text-center">
-        <p className="text-sm text-cream">Sign in to vote</p>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="signin-dialog-title"
+        className="w-full max-w-xs border-[3px] border-border bg-bg-raised p-6 text-center"
+      >
+        <p id="signin-dialog-title" className="text-sm text-cream">Sign in to vote</p>
         <p className="mt-2 text-[10px] text-muted normal-case">
           Your vote helps us decide what to build next
         </p>
         <div className="mt-5 flex gap-2">
           <button
+            ref={firstButtonRef}
             onClick={onClose}
             className="flex-1 border-[2px] border-border px-3 py-2 text-[10px] text-muted transition-colors hover:border-border-light hover:text-warm"
           >

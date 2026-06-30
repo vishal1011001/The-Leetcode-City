@@ -35,6 +35,7 @@ import {
 } from "./BuildingEffects";
 import { tierFromLevel } from "@/lib/xp";
 import { MiniWhiteRabbit } from "./WhiteRabbit";
+import { useWeather } from '@/context/WeatherContext';
 
 // Shared constants
 const WHITE = new THREE.Color("#ffffff");
@@ -53,12 +54,20 @@ const ATLAS_LIT_PCTS = [0.2, 0.35, 0.5, 0.65, 0.8, 0.95];
 
 // Parse hex/named color to ABGR uint32 for direct pixel writes (little-endian)
 function colorToABGR(hex: string): number {
-  const c = new THREE.Color(hex);
+  let h = hex;
+  if (h.startsWith("#")) h = h.slice(1);
+  if (h.length === 3) h = h.split('').map(c => c + c).join('');
+  
+  const num = parseInt(h, 16);
+  const r = (num >> 16) & 255;
+  const g = (num >> 8) & 255;
+  const b = num & 255;
+  
   return (
     255 << 24 |
-    (Math.round(c.b * 255) << 16) |
-    (Math.round(c.g * 255) << 8) |
-    Math.round(c.r * 255)
+    (b << 16) |
+    (g << 8) |
+    r
   );
 }
 
@@ -119,6 +128,61 @@ export function createWindowAtlas(colors: BuildingColors): THREE.CanvasTexture {
   return tex;
 }
 
+export function createEmissiveWindowAtlas(colors: BuildingColors): THREE.CanvasTexture {
+  const WS = 6;
+  const canvas = document.createElement("canvas");
+  canvas.width = ATLAS_SIZE;
+  canvas.height = ATLAS_SIZE;
+  const ctx = canvas.getContext("2d")!;
+
+  const imageData = ctx.createImageData(ATLAS_SIZE, ATLAS_SIZE);
+  const buf32 = new Uint32Array(imageData.data.buffer);
+
+  // Fill background with opaque BLACK (ABGR: 0xFF000000)
+  buf32.fill(0xFF000000);
+
+  const litABGRs = colors.windowLit.map(colorToABGR);
+
+  let s = 42;
+  const rand = () => {
+    s = (s * 16807) % 2147483647;
+    return (s - 1) / 2147483646;
+  };
+
+  for (let band = 0; band < ATLAS_LIT_PCTS.length; band++) {
+    const litPct = ATLAS_LIT_PCTS[band];
+    const bandStart = band * ATLAS_BAND_ROWS;
+    for (let r = 0; r < ATLAS_BAND_ROWS; r++) {
+      const rowY = (bandStart + r) * ATLAS_CELL;
+      for (let c = 0; c < ATLAS_COLS; c++) {
+        const px = c * ATLAS_CELL;
+        const isLit = rand() < litPct;
+        if (isLit) {
+          const abgr = litABGRs[Math.floor(rand() * litABGRs.length)];
+          // Write WS×WS pixel block directly
+          for (let dy = 0; dy < WS; dy++) {
+            const rowOffset = (rowY + dy) * ATLAS_SIZE + px;
+            for (let dx = 0; dx < WS; dx++) {
+              buf32[rowOffset + dx] = abgr;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.flipY = false;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.magFilter = THREE.NearestFilter;
+  tex.minFilter = THREE.NearestFilter;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 function createWindowTexture(
   rows: number,
   cols: number,
@@ -160,6 +224,53 @@ function createWindowTexture(
         ctx.fillStyle = offColor;
       }
       ctx.fillRect(x, y, WS, WS);
+    }
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.magFilter = THREE.NearestFilter;
+  tex.minFilter = THREE.NearestFilter;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function createEmissiveWindowTexture(
+  rows: number,
+  cols: number,
+  litPct: number,
+  seed: number,
+  litColors: string[]
+): THREE.CanvasTexture {
+  const WS = 6;
+  const GAP = 2;
+  const PAD = 3;
+
+  const w = PAD * 2 + cols * WS + Math.max(0, cols - 1) * GAP;
+  const h = PAD * 2 + rows * WS + Math.max(0, rows - 1) * GAP;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d")!;
+
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, w, h);
+
+  let s = seed;
+  const rand = () => {
+    s = (s * 16807) % 2147483647;
+    return (s - 1) / 2147483646;
+  };
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const x = PAD + c * (WS + GAP);
+      const y = PAD + r * (WS + GAP);
+
+      if (rand() < litPct) {
+        ctx.fillStyle = litColors[Math.floor(rand() * litColors.length)];
+        ctx.fillRect(x, y, WS, WS);
+      }
     }
   }
 
@@ -291,7 +402,6 @@ export const ClaimedGlow = memo(function ClaimedGlow({ height, width, depth }: {
 
 // ─── Multi-Level Labels ──────────────────────────────────────
 
-/** Level 1: Far — just @USERNAME (512x80, semi-transparent bg for readability) */
 function createFarLabel(building: CityBuilding): THREE.CanvasTexture {
   const W = 512;
   const H = 80;
@@ -304,17 +414,30 @@ function createFarLabel(building: CityBuilding): THREE.CanvasTexture {
     ? building.login.slice(0, 16).toUpperCase() + "..."
     : building.login.toUpperCase();
   const isFirstCitizen = building.login.toLowerCase() === "ishant_27";
-  const text = isFirstCitizen ? `@${login} 👑` : `@${login}`;
 
-  ctx.font = 'bold 40px "Silkscreen", monospace';
-  ctx.textAlign = "center";
+  // Use bold monospace to match the E-Arcade building text style
+  ctx.font = "bold 40px monospace";
   ctx.textBaseline = "middle";
 
-  // Semi-transparent background pill for contrast
-  const textWidth = ctx.measureText(text).width;
+  const tier = tierFromLevel(building.xp_level ?? 1);
+  let accentColor = "#ffa116";
+  if (building.claimed) {
+    if (tier.id !== "localhost") {
+      accentColor = tier.color;
+    }
+  } else {
+    accentColor = "rgba(140, 140, 160, 0.6)";
+  }
+
+  // Measure segments
+  const atWidth = ctx.measureText("@").width;
+  const nameWidth = ctx.measureText(login).width;
+  const crownWidth = isFirstCitizen ? ctx.measureText(" 👑").width : 0;
+  const totalWidth = atWidth + nameWidth + crownWidth;
+
   const padX = 24;
   const padY = 8;
-  const bgW = textWidth + padX * 2;
+  const bgW = totalWidth + padX * 2;
   const bgH = isFirstCitizen ? 80 : 48 + padY * 2;
   const bgX = (W - bgW) / 2;
   const bgY = (H - bgH) / 2;
@@ -333,27 +456,32 @@ function createFarLabel(building: CityBuilding): THREE.CanvasTexture {
   }
 
   if (building.claimed) {
-    const tier = tierFromLevel(building.xp_level ?? 1);
-    if (tier.id === "localhost") {
-      ctx.fillStyle = "#ffe4b5";
-      ctx.shadowColor = "rgba(255, 161, 22, 0.5)";
-    } else {
-      ctx.fillStyle = tier.color;
-      ctx.shadowColor = tier.color;
-    }
+    ctx.shadowColor = accentColor;
     ctx.shadowBlur = 8;
   } else {
-    ctx.fillStyle = "rgba(140, 140, 160, 0.6)";
+    ctx.shadowColor = "transparent";
     ctx.shadowBlur = 0;
   }
 
+  // Draw prefix/segments
+  const startX = (W - totalWidth) / 2;
+  const textY = isFirstCitizen ? H / 2 - 12 : H / 2;
+
+  ctx.textAlign = "left";
+  ctx.fillStyle = accentColor;
+  ctx.fillText("@", startX, textY);
+
+  ctx.fillStyle = building.claimed ? "#e8dcc8" : "rgba(140, 140, 160, 0.6)";
+  ctx.fillText(login, startX + atWidth, textY);
+
   if (isFirstCitizen) {
-    ctx.fillText(text, W / 2, H / 2 - 12);
-    ctx.font = 'bold 16px "Silkscreen", monospace';
     ctx.fillStyle = "#ffa116";
+    ctx.fillText(" 👑", startX + atWidth + nameWidth, textY);
+
+    ctx.font = "bold 16px monospace";
+    ctx.fillStyle = "#ffa116";
+    ctx.textAlign = "center";
     ctx.fillText("FIRST CITIZEN", W / 2, H / 2 + 22);
-  } else {
-    ctx.fillText(text, W / 2, H / 2);
   }
 
   const tex = new THREE.CanvasTexture(canvas);
@@ -403,19 +531,12 @@ function BuildingRiseAnimation({
 // ─── Focus Highlight (batman spotlight + beacon) ─────────────
 
 const BEACON_HEIGHT = 500;
-const SPOTLIGHT_Y = 400; // cone origin high above
 
 export function FocusBeacon({ height, width, depth, accentColor }: { height: number; width: number; depth: number; accentColor: string }) {
-  const coneRef = useRef<THREE.Mesh>(null);
   const markerRef = useRef<THREE.Group>(null);
 
   useFrame((state) => {
     const t = state.clock.elapsedTime;
-    // Cone pulse
-    if (coneRef.current) {
-      (coneRef.current.material as THREE.MeshBasicMaterial).opacity =
-        0.10 + Math.sin(t * 1.5) * 0.03;
-    }
     // Marker bob + spin
     if (markerRef.current) {
       markerRef.current.position.y = height + 35 + Math.sin(t * 2) * 5;
@@ -423,27 +544,8 @@ export function FocusBeacon({ height, width, depth, accentColor }: { height: num
     }
   });
 
-  const coneRadius = Math.max(width, depth) * 1.2;
-
   return (
     <group>
-      {/* Batman spotlight cone from sky */}
-      <mesh ref={coneRef} position={[0, SPOTLIGHT_Y / 2, 0]}>
-        <cylinderGeometry args={[0, coneRadius, SPOTLIGHT_Y, 32, 1, true]} />
-        <meshBasicMaterial
-          color={accentColor}
-          transparent
-          opacity={0.10}
-          side={THREE.DoubleSide}
-          depthWrite={false}
-        />
-      </mesh>
-
-      {/* Thin bright core beam */}
-      <mesh position={[0, BEACON_HEIGHT / 2, 0]}>
-        <boxGeometry args={[2, BEACON_HEIGHT, 2]} />
-        <meshBasicMaterial color={accentColor} transparent opacity={0.3} depthWrite={false} />
-      </mesh>
 
       {/* Floating diamond marker */}
       <group ref={markerRef} position={[0, height + 35, 0]}>
@@ -582,6 +684,7 @@ interface Props {
   building: CityBuilding;
   colors: BuildingColors;
   atlasTexture: THREE.CanvasTexture;
+  emissiveAtlasTexture: THREE.CanvasTexture;
   introMode?: boolean;
   focused?: boolean;
   dimmed?: boolean;
@@ -589,11 +692,12 @@ interface Props {
   onClick?: (building: CityBuilding) => void;
 }
 
-export default function Building3D({ building, colors, atlasTexture, introMode, focused, dimmed, accentColor, onClick }: Props) {
+export default function Building3D({ building, colors, atlasTexture, emissiveAtlasTexture, introMode, focused, dimmed, accentColor, onClick }: Props) {
   const groupRef = useRef<THREE.Group>(null);
   const meshRef = useRef<THREE.Mesh>(null);
   const spriteRef = useRef<THREE.Sprite>(null);
   const pointerDown = useRef<{ x: number; y: number } | null>(null);
+  const { isRaining } = useWeather();
 
   // Compute actual dimensions based on style (matches ShopPreview logic)
   const isBungalow = building.building_style === "bungalow";
@@ -606,26 +710,35 @@ export default function Building3D({ building, colors, atlasTexture, introMode, 
     const seed =
       building.login.split("").reduce((a, c) => a + c.charCodeAt(0), 0) * 137;
 
+    const safeLitPct = typeof building.litPercentage === "number" && !isNaN(building.litPercentage) ? building.litPercentage : 0.3;
+
     // Custom color buildings: per-building canvas textures (rare, <5%)
     if (building.custom_color) {
-      const blended = new THREE.Color(colors.face)
-        .lerp(new THREE.Color(building.custom_color), 0.5);
+      const blended = new THREE.Color(building.custom_color);
       const blendedHex = '#' + blended.getHexString();
       const front = createWindowTexture(
         building.floors, building.windowsPerFloor,
-        building.litPercentage, seed, colors.windowLit, colors.windowOff, blendedHex
+        safeLitPct, seed, colors.windowLit, colors.windowOff, blendedHex
       );
       const side = createWindowTexture(
         building.floors, building.sideWindowsPerFloor,
-        building.litPercentage, seed + 7919, colors.windowLit, colors.windowOff, blendedHex
+        safeLitPct, seed + 7919, colors.windowLit, colors.windowOff, blendedHex
       );
-      return { front, side };
+      const frontEmissive = createEmissiveWindowTexture(
+        building.floors, building.windowsPerFloor,
+        safeLitPct, seed, colors.windowLit
+      );
+      const sideEmissive = createEmissiveWindowTexture(
+        building.floors, building.sideWindowsPerFloor,
+        safeLitPct, seed + 7919, colors.windowLit
+      );
+      return { front, side, frontEmissive, sideEmissive };
     }
 
     // Atlas-based textures — litPercentage drives how many windows are lit.
     // For LC buildings litPercentage = active_days / 365 (set at claim time),
     // so a daily grinder has nearly all windows lit, a casual solver has fewer.
-    const bandIndex = Math.min(5, Math.max(0, Math.round(building.litPercentage * 5)));
+    const bandIndex = Math.min(5, Math.max(0, Math.round(safeLitPct * 5)));
     const bandRowOffset = bandIndex * ATLAS_BAND_ROWS;
 
     // Adjust windows based on bungalow dims to keep aspect ratio mapping mostly correct
@@ -643,36 +756,72 @@ export default function Building3D({ building, colors, atlasTexture, introMode, 
     side.offset.set(sideColStart / ATLAS_COLS, bandRowOffset / ATLAS_COLS);
     side.repeat.set(effWindowsD / ATLAS_COLS, effFloors / ATLAS_COLS);
 
-    return { front, side };
-  }, [building, colors, atlasTexture, isBungalow, W, H, D]);
+    const frontEmissive = emissiveAtlasTexture.clone();
+    frontEmissive.offset.set(frontColStart / ATLAS_COLS, bandRowOffset / ATLAS_COLS);
+    frontEmissive.repeat.set(effWindowsW / ATLAS_COLS, effFloors / ATLAS_COLS);
 
+    const sideEmissive = emissiveAtlasTexture.clone();
+    sideEmissive.offset.set(sideColStart / ATLAS_COLS, bandRowOffset / ATLAS_COLS);
+    sideEmissive.repeat.set(effWindowsD / ATLAS_COLS, effFloors / ATLAS_COLS);
+
+    return { front, side, frontEmissive, sideEmissive };
+  }, [building, colors, atlasTexture, emissiveAtlasTexture, isBungalow, W, H, D]);
+
+  // 1. Move useFrame out here so it sits at the root level of the component!
+useFrame((state, delta) => {
+  if (!materials || materials.length === 0) return;
+
+  materials.forEach((mat, idx) => {
+    const isRoof = idx === 2 || idx === 3;
+    const baseRoughness = isRoof ? 0.6 : 0.85;
+    
+    const targetRoughness = isRaining ? 0.15 : baseRoughness;
+    const targetMetalness = isRaining ? 0.25 : 0.0;
+
+    // Optimization: Only run calculations if current roughness hasn't reached target yet
+    if (Math.abs(mat.roughness - targetRoughness) > 0.01) {
+      mat.roughness = THREE.MathUtils.lerp(mat.roughness, targetRoughness, delta * 2);
+    } else {
+      mat.roughness = targetRoughness; // Snap to target to stop wasting CPU cycles
+    }
+
+    // Optimization: Only run calculations if current metalness hasn't reached target yet
+    if (Math.abs(mat.metalness - targetMetalness) > 0.01) {
+      mat.metalness = THREE.MathUtils.lerp(mat.metalness, targetMetalness, delta * 2);
+    } else {
+      mat.metalness = targetMetalness; // Snap to target to stop wasting CPU cycles
+    }
+  });
+});
+
+  // 2. Keep useEffect strictly for cleaning up your canvas textures on unmount
   useEffect(() => {
     return () => {
       textures.front.dispose();
       textures.side.dispose();
+      textures.frontEmissive?.dispose();
+      textures.sideEmissive?.dispose();
     };
   }, [textures]);
 
   const materials = useMemo(() => {
     const roof = new THREE.MeshStandardMaterial({
       color: colors.roof,
-      emissive: new THREE.Color(colors.roof),
-      emissiveIntensity: 2.2,
       roughness: 0.6,
     });
     const emIntensity = building.custom_color ? 2.0 : 2.8;
-    const make = (tex: THREE.CanvasTexture) =>
+    const make = (tex: THREE.CanvasTexture, emissiveTex: THREE.CanvasTexture) =>
       new THREE.MeshStandardMaterial({
         map: tex,
         emissive: WHITE,
-        emissiveMap: tex,
+        emissiveMap: emissiveTex,
         emissiveIntensity: emIntensity,
         roughness: 0.85,
         metalness: 0,
       });
     // Reuse material instances for opposite faces (5 allocs -> 3)
-    const side = make(textures.side);
-    const front = make(textures.front);
+    const side = make(textures.side, textures.sideEmissive);
+    const front = make(textures.front, textures.frontEmissive);
     return [side, side, roof, roof, front, front];
   }, [textures, colors.roof]);
 

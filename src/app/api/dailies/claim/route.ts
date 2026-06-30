@@ -15,7 +15,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
 
-  const { ok } = rateLimit(`dailies-claim:${user.id}`, 2, 10_000);
+  const { ok } = await rateLimit(`dailies-claim:${user.id}`, 2, 10_000);
   if (!ok) {
     return NextResponse.json({ error: "Too fast" }, { status: 429 });
   }
@@ -24,7 +24,7 @@ export async function POST(request: Request) {
 
   const { data: dev } = await admin
     .from("developers")
-    .select("id, github_login, claimed, contributions, public_repos, total_stars, kudos_count, dailies_completed, dailies_streak, last_dailies_date")
+    .select("id, github_login, claimed, contributions, public_repos, total_stars, kudos_count, dailies_completed, dailies_streak, last_dailies_date, easy_solved, medium_solved, hard_solved, contest_rating, lc_streak, total_prs")
     .eq("claimed_by", user.id)
     .single();
 
@@ -89,25 +89,49 @@ export async function POST(request: Request) {
   }
 
   const points_granted = 15;
+  const xp_granted = 25;
   // Grant XP for completing all dailies
-  await admin.rpc("grant_xp", { p_developer_id: dev.id, p_source: "dailies", p_amount: 25 });
+  await admin.rpc("grant_xp_atomic", { p_developer_id: dev.id, p_source: "dailies", p_amount: xp_granted });
 
   // Grant streak freeze every 7 completions (cap at 2)
+  // ── BEFORE (read-then-write race): ─────────────────────────────────────────
+  //   SELECT streak_freezes_available → check < 2 in JS → call grant_streak_freeze
+  //   Two concurrent requests both read 1, both pass, both increment → value = 3.
+  //
+  // ── AFTER (atomic): ────────────────────────────────────────────────────────
+  //   grant_streak_freeze() now does UPDATE ... WHERE streak_freezes_available < 2
+  //   and returns { granted: boolean }. Only the first concurrent caller satisfies
+  //   the WHERE clause — the second gets ROW_COUNT = 0 → granted = false.
+  //   No JS-level SELECT or < 2 check needed; the RPC is the single source of truth.
   let freezeGranted = false;
   if (claimResult.total % 7 === 0) {
-    const { data: devFreeze } = await admin
-      .from("developers")
-      .select("streak_freezes_available")
-      .eq("id", dev.id)
-      .single();
+    const { data: freezeResult, error: freezeError } = await admin.rpc(
+      "grant_streak_freeze",
+      { p_developer_id: dev.id }
+    );
 
-    if ((devFreeze?.streak_freezes_available ?? 0) < 2) {
-      await admin.rpc("grant_streak_freeze", { p_developer_id: dev.id });
-      await admin.from("streak_freeze_log").insert({
-        developer_id: dev.id,
-        action: "granted_dailies",
-      });
-      freezeGranted = true;
+    if (freezeError) {
+      // Non-fatal — log and continue. The daily claim itself succeeded.
+      console.error("[dailies] grant_streak_freeze error:", freezeError.message);
+    } else {
+      // freezeResult is an array of rows: [{ granted: boolean }]
+      const granted = freezeResult?.[0]?.granted === true;
+
+      if (granted) {
+        // Only insert the log row when the RPC actually incremented.
+        // The UNIQUE(developer_id, action, granted_date) constraint on
+        // streak_freeze_log (migration 058) prevents duplicate rows even
+        // if two concurrent grants both reach here (belt-and-suspenders).
+        await admin.from("streak_freeze_log").upsert(
+          {
+            developer_id: dev.id,
+            action: "granted_dailies",
+            granted_date: today,
+          },
+          { onConflict: "developer_id,action,granted_date", ignoreDuplicates: true }
+        );
+        freezeGranted = true;
+      }
     }
   }
 
@@ -134,6 +158,12 @@ export async function POST(request: Request) {
       gifts_sent: 0,
       gifts_received: 0,
       dailies_completed: claimResult.total,
+      easy_solved: dev.easy_solved ?? 0,
+      medium_solved: dev.medium_solved ?? 0,
+      hard_solved: dev.hard_solved ?? 0,
+      contest_rating: dev.contest_rating ?? 0,
+      lc_streak: dev.lc_streak ?? 0,
+      total_prs: dev.total_prs ?? 0,
     },
     githubLogin,
   );
@@ -144,5 +174,6 @@ export async function POST(request: Request) {
     total: claimResult.total,
     freeze_granted: freezeGranted,
     points_granted: points_granted,
+    xp_granted,
   });
 }

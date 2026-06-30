@@ -41,7 +41,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
 
-  const { ok } = rateLimit(`raid-preview:${user.id}`, 5, 10_000);
+  const { ok } = await rateLimit(`raid-preview:${user.id}`, 5, 10_000);
   if (!ok) {
     return NextResponse.json({ error: "Too fast" }, { status: 429 });
   }
@@ -57,8 +57,21 @@ export async function POST(request: Request) {
   // Fetch attacker
   const attacker = await findRaidAttackerForUser(admin, user, attackerColumns);
 
-  if (!attacker || !attacker.claimed) {
-    return NextResponse.json({ error: "Must claim building first" }, { status: 403 });
+  if (!attacker) {
+    return NextResponse.json(
+      {
+        error:
+          "Your LeetCode stats are still being synced. Please check back in a few minutes!",
+      },
+      { status: 403 }
+    );
+  }
+
+  if (!attacker.claimed) {
+    return NextResponse.json(
+      { error: "Must claim building first" },
+      { status: 403 }
+    );
   }
 
   // Compile attacker's owned items from purchases
@@ -85,7 +98,7 @@ export async function POST(request: Request) {
   const defenderRes = await admin
     .from("developers")
     .select("id, claimed, app_streak, avatar_url, github_login, contributions, current_week_contributions, current_week_kudos_received, last_raided_at, active_defenses")
-    .eq("github_login", target_login.toLowerCase())
+    .ilike("github_login", target_login)
     .single();
 
   const defender = defenderRes.data as RaidDefender | null;

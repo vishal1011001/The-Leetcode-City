@@ -8,6 +8,9 @@ import { sendAdExpiringEmail, sendAdExpiredEmail } from "@/lib/ad-emails";
 export async function GET(request: NextRequest) {
   // Verify Vercel Cron secret
   const authHeader = request.headers.get("authorization");
+  if (!process.env.CRON_SECRET) {
+    return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
+  }
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -101,7 +104,10 @@ export async function GET(request: NextRequest) {
 
           await sb
             .from("sky_ads")
-            .update({ expiry_notified: "expired" })
+            .update({ 
+              active: false,
+              expiry_notified: "expired" 
+            })
             .eq("id", ad.id);
 
           results.expired++;

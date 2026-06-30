@@ -121,33 +121,7 @@ const HeatShimmerVolume = ({ intensity }: { intensity: number }) => {
  * Simulates atmospheric scattering using a multi-layered geometry approximation.
  */
 const VolumetricGodRays = ({ sunPos }: { sunPos: THREE.Vector3 }) => {
-  const groupRef = useRef<THREE.Group>(null);
-
-  useFrame((state) => {
-    if (groupRef.current) {
-      const t = state.clock.getElapsedTime();
-      // Rotate rays subtly relative to solar zenith paths
-      groupRef.current.rotation.y = Math.sin(t * 0.02) * 0.05;
-    }
-  });
-
-  return (
-    <group ref={groupRef} position={sunPos.clone().multiplyScalar(0.5)}>
-      {Array.from({ length: 4 }).map((_, i) => (
-        <mesh key={i} rotation={[Math.PI / 4, (i * Math.PI) / 2, 0]}>
-          <cylinderGeometry args={[10, 150, 600, 16, 1, true]} />
-          <meshBasicMaterial
-            color="#ffeedd"
-            transparent
-            opacity={0.03 - i * 0.005}
-            blending={THREE.AdditiveBlending}
-            side={THREE.DoubleSide}
-            depthWrite={false}
-          />
-        </mesh>
-      ))}
-    </group>
-  );
+  return null;
 };
 
 /**
@@ -225,30 +199,6 @@ export const SunnyWeather = ({
 
   return (
     <group name="subsystem-sunny-weather">
-      {/* Intense Golden Hour Directional Light System */}
-      <directionalLight
-        ref={directionalLightRef}
-        position={parsedSunPos}
-        color="#fffaed"
-        intensity={2.8 * intensity}
-        castShadow
-        shadow-mapSize-width={2048}
-        shadow-mapSize-height={2048}
-        shadow-camera-far={2500}
-        shadow-camera-left={-600}
-        shadow-camera-right={600}
-        shadow-camera-top={600}
-        shadow-camera-bottom={-600}
-        shadow-bias={-0.0005}
-      />
-
-      {/* Warm Ambient Reflection Secondary Bounce */}
-      <ambientLight
-        ref={ambientLightRef}
-        color="#ffebcc"
-        intensity={0.45 * intensity}
-      />
-
       {/* High-Fidelity Rendering Layer Components */}
       <HeatShimmerVolume intensity={intensity} />
       <VolumetricGodRays sunPos={parsedSunPos} />

@@ -15,6 +15,8 @@ function lerpColor(c1: string, c2: string, alpha: number): string {
 
 interface AtmosphereState {
   fogColor: string;
+  fogNear: number;
+  fogFar: number;
   ambientColor: string;
   ambientIntensity: number;
   sunColor: string;
@@ -32,6 +34,8 @@ const ATMOSPHERE_STATES: AtmosphereState[] = [
   // 0: Midnight
   {
     fogColor: "#0a1428",
+    fogNear: 400,
+    fogFar: 2500,
     ambientColor: "#304880",
     ambientIntensity: 0.18,
     sunColor: "#7090d0",
@@ -47,6 +51,8 @@ const ATMOSPHERE_STATES: AtmosphereState[] = [
   // 1: Dawn
   {
     fogColor: "#4a2c3a",
+    fogNear: 500,
+    fogFar: 3000,
     ambientColor: "#8a6a7c",
     ambientIntensity: 0.5,
     sunColor: "#ffcc88",
@@ -56,27 +62,31 @@ const ATMOSPHERE_STATES: AtmosphereState[] = [
     hemiSky: "#9a6a8c",
     hemiGround: "#281e24",
     hemiIntensity: 0.45,
-    skyStops: ["#080a15", "#d5836a", "#4a2c3a", "#4a2c3a", "#4a2c3a"],
+    skyStops: ["#0c1028", "#d5836a", "#4a2c3a", "#4a2c3a", "#4a2c3a"],
     uTimeOfDay: 0.4,
   },
   // 2: Noon (Day)
   {
-    fogColor: "#8cbeff",
-    ambientColor: "#ffffff",
-    ambientIntensity: 0.85,
+    fogColor: "#5a90c8",
+    fogNear: 800,
+    fogFar: 4000,
+    ambientColor: "#e8ecf0",
+    ambientIntensity: 0.75,
     sunColor: "#fffcf0",
     sunIntensity: 1.3,
-    fillColor: "#a0c0ff",
-    fillIntensity: 0.4,
-    hemiSky: "#a0c8ff",
+    fillColor: "#80a0d0",
+    fillIntensity: 0.35,
+    hemiSky: "#80a8d8",
     hemiGround: "#403830",
-    hemiIntensity: 0.75,
-    skyStops: ["#103ca0", "#2a68d0", "#8cbeff", "#8cbeff", "#8cbeff"],
+    hemiIntensity: 0.65,
+    skyStops: ["#1848b0", "#3070d0", "#5a90c8", "#5a90c8", "#5a90c8"],
     uTimeOfDay: 1.0,
   },
   // 3: Sunset
   {
     fogColor: "#602c40",
+    fogNear: 500,
+    fogFar: 3000,
     ambientColor: "#d08060",
     ambientIntensity: 0.55,
     sunColor: "#f0a060",
@@ -86,7 +96,7 @@ const ATMOSPHERE_STATES: AtmosphereState[] = [
     hemiSky: "#c06070",
     hemiGround: "#382028",
     hemiIntensity: 0.6,
-    skyStops: ["#08040d", "#f0b878", "#602c40", "#602c40", "#602c40"],
+    skyStops: ["#1a1848", "#f0b878", "#602c40", "#602c40", "#602c40"],
     uTimeOfDay: 0.4,
   },
 ];
@@ -370,7 +380,7 @@ function AmbientOceanShips({ cityRadius }: { cityRadius: number }) {
       // Cruise in the open water further away from the city boundary!
       const radius = cityRadius * 1.45 + rng() * (cityRadius * 0.4);
       const angle = (i / 18) * Math.PI * 2 + rng() * 0.4;
-
+      
       // Speedboats travel significantly faster!
       const speedMultiplier = type === "speedboat" ? 2.2 : 1.0;
       const speed = (0.008 + rng() * 0.012) * speedMultiplier;
@@ -381,7 +391,7 @@ function AmbientOceanShips({ cityRadius }: { cityRadius: number }) {
         scaleVal = 16 + rng() * 8; // compact sleek speedboats
       }
       const scale: [number, number, number] = [scaleVal, scaleVal, scaleVal];
-
+      
       const hullColor = type === "cruise" ? "#0f172a" : colors[i % colors.length];
       const cabinColor = "#f4ebd0";
 
@@ -421,7 +431,7 @@ function AmbientOceanShips({ cityRadius }: { cityRadius: number }) {
       // Rocking motions optimized for size and style
       const bobMultiplier = s.type === "speedboat" ? 1.8 : 1.0;
       const pitchMultiplier = s.type === "speedboat" ? 2.5 : 1.0;
-
+      
       const bobbing = (s.type === "speedboat" ? -20.0 : -23.5) + Math.sin(time * 0.8 * bobMultiplier + idx) * 0.6 * bobMultiplier;
       const pitch = Math.sin(time * 0.6 * pitchMultiplier + idx) * 0.02 * pitchMultiplier;
       const roll = Math.cos(time * 0.8 * pitchMultiplier + idx) * 0.03 * pitchMultiplier;
@@ -467,7 +477,7 @@ function AmbientOceanShips({ cityRadius }: { cityRadius: number }) {
               <mesh geometry={boxGeo} position={[0, 1.85, -0.68]} scale={[1.0, 0.2, 0.05]}>
                 <meshStandardMaterial color="#38bdf8" emissive="#0ea5e9" emissiveIntensity={2.5} toneMapped={false} />
               </mesh>
-
+              
               {/* Mast / Radar Tower on top of cabin */}
               <mesh geometry={cylinderGeo} position={[0, 2.3, -1.2]} scale={[0.08, 0.6, 0.08]}>
                 <meshStandardMaterial color="#475569" />
@@ -558,7 +568,7 @@ function AmbientOceanShips({ cityRadius }: { cityRadius: number }) {
               <mesh geometry={boxGeo} position={[0, 0.7, 0]} scale={[1.6, 0.2, 4.8]}>
                 <meshStandardMaterial color="#f8fafc" roughness={0.7} />
               </mesh>
-
+              
               {/* Stepped Voxel Bow (Pointy but retro blocky) */}
               <mesh geometry={boxGeo} position={[0, 0.3, 2.7]} scale={[1.4, 0.6, 0.6]}>
                 <meshStandardMaterial color="#0f172a" roughness={0.7} />
@@ -664,7 +674,7 @@ function AmbientOceanShips({ cityRadius }: { cityRadius: number }) {
               <mesh geometry={boxGeo} position={[0, 0.25, 0]} scale={[1.1, 0.5, 3.2]}>
                 <meshStandardMaterial color={s.hullColor} metalness={0.7} roughness={0.2} />
               </mesh>
-
+              
               {/* Aggressive wedge pointed front */}
               <mesh geometry={boxGeo} position={[0, 0.25, 1.8]} scale={[0.9, 0.5, 0.4]}>
                 <meshStandardMaterial color={s.hullColor} metalness={0.7} roughness={0.2} />
@@ -901,12 +911,16 @@ function FlyingCityShips({ cityRadius }: { cityRadius: number }) {
           s.bannerResources.tex.dispose();
         }
       });
+    };
+  }, [ships]);
+
+  useEffect(() => {
+    return () => {
       boxGeo.dispose();
       coneGeo.dispose();
       cylinderGeo.dispose();
     };
-  }, [ships, boxGeo, coneGeo, cylinderGeo]);
-
+  }, [boxGeo, coneGeo, cylinderGeo]);
   useFrame((state, delta) => {
     const time = state.clock.elapsedTime;
     if (!groupRef.current) return;
@@ -1051,10 +1065,7 @@ function FlyingCityShips({ cityRadius }: { cityRadius: number }) {
                   toneMapped={false}
                 />
               </mesh>
-              {/* Front searchlight beam cone */}
-              <mesh geometry={coneGeo} position={[0, -0.2, 1.4]} scale={[0.4, 0.8, 0.4]} rotation={[Math.PI / 2.3, 0, 0]}>
-                <meshStandardMaterial color="#fef08a" emissive="#fef08a" emissiveIntensity={1.5} transparent opacity={0.25} depthWrite={false} fog={false} />
-              </mesh>
+              {/* Front searchlight beam cone removed */}
             </>
           )}
 
@@ -1125,6 +1136,299 @@ function FlyingCityShips({ cityRadius }: { cityRadius: number }) {
   );
 }
 
+// ─── Moon Glow Shaders ───────────────────────────────────────
+const moonVertexShader = `
+  varying vec3 vNormal;
+  varying vec3 vViewPosition;
+  void main() {
+    vNormal = normalize(normalMatrix * normal);
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    vViewPosition = -mvPosition.xyz;
+    gl_Position = projectionMatrix * mvPosition;
+  }
+`;
+
+const moonFragmentShader = `
+  varying vec3 vNormal;
+  varying vec3 vViewPosition;
+  void main() {
+    vec3 normal = normalize(vNormal);
+    vec3 viewDir = normalize(vViewPosition);
+    float intensity = dot(normal, viewDir);
+    intensity = clamp(intensity, 0.0, 1.0);
+    
+    vec3 coreColor = vec3(1.0, 1.0, 1.0);
+    vec3 edgeColor = vec3(0.85, 0.92, 1.0);
+    
+    float factor = pow(intensity, 1.5);
+    vec3 finalColor = mix(edgeColor, coreColor, factor);
+    
+    float glow = pow(1.0 - intensity, 2.5);
+    vec3 glowColor = vec3(0.6, 0.8, 1.0);
+    
+    vec3 color = finalColor + glowColor * glow * 0.4;
+    gl_FragColor = vec4(color, 1.0);
+  }
+`;
+
+const moonGlowVertexShader = `
+  varying vec3 vNormal;
+  varying vec3 vViewPosition;
+  void main() {
+    vNormal = normalize(normalMatrix * normal);
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    vViewPosition = -mvPosition.xyz;
+    gl_Position = projectionMatrix * mvPosition;
+  }
+`;
+
+const moonGlowFragmentShader = `
+  varying vec3 vNormal;
+  varying vec3 vViewPosition;
+  void main() {
+    vec3 normal = normalize(vNormal);
+    vec3 viewDir = normalize(vViewPosition);
+    
+    float intensity = max(dot(normal, viewDir), 0.0);
+    // Smooth corona halo: peaks near the inner sphere boundary and fades to 0 at the outer edge
+    float glow = pow(1.0 - intensity, 2.0) * intensity * 3.0;
+    vec3 glowColor = vec3(0.8, 0.92, 1.0);
+    
+    gl_FragColor = vec4(glowColor, glow * 0.5);
+  }
+`;
+
+// ─── Sun Shaders ─────────────────────────────────────────────
+const sunVertexShader = `
+  varying vec3 vNormal;
+  varying vec3 vViewPosition;
+  void main() {
+    vNormal = normalize(normalMatrix * normal);
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    vViewPosition = -mvPosition.xyz;
+    gl_Position = projectionMatrix * mvPosition;
+  }
+`;
+
+const sunFragmentShader = `
+  varying vec3 vNormal;
+  varying vec3 vViewPosition;
+  void main() {
+    vec3 normal = normalize(vNormal);
+    vec3 viewDir = normalize(vViewPosition);
+    float intensity = dot(normal, viewDir);
+    intensity = clamp(intensity, 0.0, 1.0);
+    
+    // Warm sun colors: bright white/yellow core, deep gold/orange edge
+    vec3 coreColor = vec3(1.0, 0.98, 0.9);
+    vec3 edgeColor = vec3(1.0, 0.65, 0.1);
+    
+    float factor = pow(intensity, 1.5);
+    vec3 finalColor = mix(edgeColor, coreColor, factor);
+    
+    // Fresnel rim glow
+    float glow = pow(1.0 - intensity, 2.5);
+    vec3 glowColor = vec3(1.0, 0.5, 0.0);
+    
+    vec3 color = finalColor + glowColor * glow * 0.4;
+    gl_FragColor = vec4(color, 1.0);
+  }
+`;
+
+const sunGlowVertexShader = `
+  varying vec3 vNormal;
+  varying vec3 vViewPosition;
+  void main() {
+    vNormal = normalize(normalMatrix * normal);
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    vViewPosition = -mvPosition.xyz;
+    gl_Position = projectionMatrix * mvPosition;
+  }
+`;
+
+const sunGlowFragmentShader = `
+  varying vec3 vNormal;
+  varying vec3 vViewPosition;
+  void main() {
+    vec3 normal = normalize(vNormal);
+    vec3 viewDir = normalize(vViewPosition);
+    
+    float intensity = max(dot(normal, viewDir), 0.0);
+    // Smooth corona halo: peaks near the inner sphere boundary and fades to 0 at the outer edge
+    float glow = pow(1.0 - intensity, 2.0) * intensity * 3.0;
+    vec3 glowColor = vec3(1.0, 0.63, 0.1);
+    
+    gl_FragColor = vec4(glowColor, glow * 0.5);
+  }
+`;
+
+// ─── Starfield Component ───────────────────────────────────────
+function Starfield({ timeRef, active }: { timeRef: React.MutableRefObject<number>; active: boolean }) {
+  const pointsRef = useRef<THREE.Points>(null);
+
+  const { positions, sizes, phases } = useMemo(() => {
+    const count = 400;
+    const pos = new Float32Array(count * 3);
+    const sz = new Float32Array(count);
+    const ph = new Float32Array(count);
+
+    const radius = 3400;
+    for (let i = 0; i < count; i++) {
+      // Spherical coordinates
+      const u = Math.random();
+      const v = Math.random();
+      const theta = u * 2.0 * Math.PI;
+      // Bias phi to keep stars in the upper sky (Y >= 0)
+      const phi = Math.acos(v) * 0.9; 
+
+      const x = radius * Math.sin(phi) * Math.cos(theta);
+      const y = radius * Math.cos(phi);
+      const z = radius * Math.sin(phi) * Math.sin(theta);
+
+      pos[i * 3] = x;
+      pos[i * 3 + 1] = y; 
+      pos[i * 3 + 2] = z;
+
+      sz[i] = 2.0 + Math.random() * 3.0; // star sizes
+      ph[i] = Math.random() * Math.PI * 2.0; // random phase for twinkling
+    }
+
+    return { positions: pos, sizes: sz, phases: ph };
+  }, []);
+
+  const starShader = useMemo(() => {
+    return new THREE.ShaderMaterial({
+      vertexShader: `
+        uniform float uTime;
+        uniform float uNightFactor;
+        attribute float aSize;
+        attribute float aPhase;
+        varying float vOpacity;
+
+        void main() {
+          // Twinkle effect
+          float twinkle = 0.5 + 0.5 * sin(uTime * 2.5 + aPhase);
+          vOpacity = uNightFactor * twinkle;
+
+          vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = aSize * (300.0 / -mvPosition.z);
+          gl_Position = projectionMatrix * mvPosition;
+        }
+      `,
+      fragmentShader: `
+        varying float vOpacity;
+
+        void main() {
+          vec2 coord = gl_PointCoord - vec2(0.5);
+          if (length(coord) > 0.5) discard;
+          gl_FragColor = vec4(1.0, 1.0, 1.0, vOpacity);
+        }
+      `,
+      uniforms: {
+        uTime: { value: 0 },
+        uNightFactor: { value: 0 },
+      },
+      transparent: true,
+      depthWrite: false,
+      fog: false,
+      blending: THREE.AdditiveBlending,
+    });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      starShader.dispose();
+    };
+  }, [starShader]);
+
+  useFrame((state) => {
+    const { camera, clock } = state;
+    if (pointsRef.current) {
+      pointsRef.current.position.copy(camera.position);
+    }
+
+    const t = active ? timeRef.current : 0.0;
+    let nightFactor = 0;
+    if (t < 0.25) {
+      nightFactor = 1.0 - (t / 0.25);
+    } else if (t > 0.75) {
+      nightFactor = (t - 0.75) / 0.25;
+    }
+
+    starShader.uniforms.uTime.value = clock.getElapsedTime();
+    starShader.uniforms.uNightFactor.value = nightFactor;
+  });
+
+  return (
+    <points ref={pointsRef} frustumCulled={false}>
+      <bufferGeometry>
+        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+        <bufferAttribute attach="attributes-aSize" args={[sizes, 1]} />
+        <bufferAttribute attach="attributes-aPhase" args={[phases, 1]} />
+      </bufferGeometry>
+      <primitive object={starShader} attach="material" />
+    </points>
+  );
+}
+
+// ─── VolumetricMoonRays Component ─────────────────────────────
+function VolumetricMoonRays({ moonGroupRef }: { moonGroupRef: React.RefObject<THREE.Group | null> }) {
+  return null;
+}
+
+// ─── MoonLensFlare Component ──────────────────────────────────
+function MoonLensFlare({ moonGroupRef }: { moonGroupRef: React.RefObject<THREE.Group | null> }) {
+  const flareRef = useRef<THREE.Group>(null);
+  const { camera } = useThree();
+
+  useFrame(() => {
+    if (!flareRef.current || !moonGroupRef.current) return;
+    
+    if (!moonGroupRef.current.visible) {
+      flareRef.current.visible = false;
+      return;
+    }
+
+    // Project the moon coordinates into clip-space coordinates
+    const projPos = moonGroupRef.current.position.clone().project(camera);
+    const isBehindCamera = projPos.z > 1;
+
+    if (isBehindCamera) {
+      flareRef.current.visible = false;
+      return;
+    }
+
+    flareRef.current.visible = true;
+    
+    // Position individual flare rings across the screen vector
+    const children = flareRef.current.children;
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i] as THREE.Mesh;
+      const offsetFactor = (i - children.length / 2) * 0.25;
+      child.position.set(projPos.x * offsetFactor * 200, projPos.y * offsetFactor * 200, 0);
+    }
+  });
+
+  return (
+    <group ref={flareRef}>
+      {/* Primary Optic Element */}
+      <mesh frustumCulled={false}>
+        <ringGeometry args={[0, 9, 32]} />
+        <meshBasicMaterial color="#ffffff" transparent opacity={0.2} blending={THREE.AdditiveBlending} depthTest={false} />
+      </mesh>
+      {/* Secondary Diffused Halos */}
+      <mesh scale={2.5} frustumCulled={false}>
+        <ringGeometry args={[6, 8, 32]} />
+        <meshBasicMaterial color="#d0e5ff" transparent opacity={0.06} blending={THREE.AdditiveBlending} depthTest={false} />
+      </mesh>
+      <mesh scale={4.0} frustumCulled={false}>
+        <ringGeometry args={[11, 12, 32]} />
+        <meshBasicMaterial color="#aaccff" transparent opacity={0.03} blending={THREE.AdditiveBlending} depthTest={false} />
+      </mesh>
+    </group>
+  );
+}
+
 // ─── AtmosphereCycleManager Component ─────────────────────────────
 interface AtmosphereCycleManagerProps {
   theme: any;
@@ -1144,6 +1448,56 @@ export default function AtmosphereCycleManager({
   weatherMode = "sunny",
 }: AtmosphereCycleManagerProps) {
   const { scene } = useThree();
+
+  const moonMaterials = useMemo(() => {
+    const body = new THREE.ShaderMaterial({
+      vertexShader: moonVertexShader,
+      fragmentShader: moonFragmentShader,
+      fog: false,
+    });
+    const glow = new THREE.ShaderMaterial({
+      vertexShader: moonGlowVertexShader,
+      fragmentShader: moonGlowFragmentShader,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      side: THREE.BackSide,
+      depthWrite: false,
+      fog: false,
+    });
+    return { body, glow };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      moonMaterials.body.dispose();
+      moonMaterials.glow.dispose();
+    };
+  }, [moonMaterials]);
+
+  const sunMaterials = useMemo(() => {
+    const body = new THREE.ShaderMaterial({
+      vertexShader: sunVertexShader,
+      fragmentShader: sunFragmentShader,
+      fog: false,
+    });
+    const glow = new THREE.ShaderMaterial({
+      vertexShader: sunGlowVertexShader,
+      fragmentShader: sunGlowFragmentShader,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      side: THREE.BackSide,
+      depthWrite: false,
+      fog: false,
+    });
+    return { body, glow };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      sunMaterials.body.dispose();
+      sunMaterials.glow.dispose();
+    };
+  }, [sunMaterials]);
 
   const fogRef = useRef<THREE.Fog>(null);
   const ambientLightRef = useRef<THREE.AmbientLight>(null);
@@ -1181,7 +1535,7 @@ export default function AtmosphereCycleManager({
       if (lightningTimeRef.current >= nextLightningTimeRef.current) {
         lightningTimeRef.current = 0;
         nextLightningTimeRef.current = 5 + Math.random() * 8; // strike every 5-13 seconds
-
+        
         // Generate new procedural jagged lightning bolt path
         boltRef.current = {
           visible: true,
@@ -1193,7 +1547,7 @@ export default function AtmosphereCycleManager({
           dz2: (Math.random() - 0.5) * 140 + (Math.random() > 0.5 ? 60 : -60),
         };
       }
-
+      
       const elapsed = lightningTimeRef.current;
       // Real lightning double strike/flicker
       if (elapsed < 0.08) {
@@ -1221,12 +1575,12 @@ export default function AtmosphereCycleManager({
           // Segment 1 (Vertical top)
           children[0].position.set(b.startX, 290, b.startZ);
           // Segment 2 (Horizontal link 1)
-          children[1].position.set(b.startX + b.dx1 / 2, 260, b.startZ + b.dz1 / 2);
+          children[1].position.set(b.startX + b.dx1/2, 260, b.startZ + b.dz1/2);
           children[1].scale.set(Math.abs(b.dx1) + 8, 8, Math.abs(b.dz1) + 8);
           // Segment 3 (Vertical middle)
           children[2].position.set(b.startX + b.dx1, 190, b.startZ + b.dz1);
           // Segment 4 (Horizontal link 2)
-          children[3].position.set(b.startX + b.dx1 + b.dx2 / 2, 150, b.startZ + b.dz1 + b.dz2 / 2);
+          children[3].position.set(b.startX + b.dx1 + b.dx2/2, 150, b.startZ + b.dz1 + b.dz2/2);
           children[3].scale.set(Math.abs(b.dx2) + 8, 8, Math.abs(b.dz2) + 8);
           // Segment 5 (Vertical bottom)
           children[4].position.set(b.startX + b.dx1 + b.dx2, 70, b.startZ + b.dz1 + b.dz2);
@@ -1301,16 +1655,22 @@ export default function AtmosphereCycleManager({
         fogColorToUse = lerpColor(currentFog, "#c8d6e5", 0.65);
       }
 
+      // Interpolate fog distances for time-of-day (daytime = clear views, night = closer fog)
+      const currentFogNear = s1.fogNear + (s2.fogNear - s1.fogNear) * f;
+      const currentFogFar = s1.fogFar + (s2.fogFar - s1.fogFar) * f;
+
       const fog = scene.fog as THREE.Fog | null;
       if (fog) {
         fog.color.set(lightningIntensity > 0 ? "#e2f0ff" : fogColorToUse);
+        fog.near = currentFogNear;
+        fog.far = currentFogFar;
       }
       scene.background = new THREE.Color(lightningIntensity > 0 ? "#cbd5e1" : fogColorToUse);
 
       // 2. Update Lights
       if (ambientLightRef.current) {
         ambientLightRef.current.color.set(lightningIntensity > 0 ? "#cbd5e1" : currentAmbientColor);
-        ambientLightRef.current.intensity = (currentAmbientIntensity + lightningIntensity * 0.7) * 3.0;
+        ambientLightRef.current.intensity = (currentAmbientIntensity + lightningIntensity * 0.7) * 2.2;
       }
 
       // Calculate dynamic positions for Sun and Moon
@@ -1329,7 +1689,7 @@ export default function AtmosphereCycleManager({
           intensityFactor = 0.45; // Dim the sun for cozy snow clouds!
         }
         sunLightRef.current.intensity = isAboveHorizon
-          ? Math.sin(theta) * currentSunIntensity * 3.5 * intensityFactor + lightningIntensity * 1.5
+          ? Math.sin(theta) * currentSunIntensity * 2.5 * intensityFactor + lightningIntensity * 1.5
           : lightningIntensity * 1.5;
       }
 
@@ -1342,26 +1702,26 @@ export default function AtmosphereCycleManager({
         );
         const sunIsBelowHorizon = Math.sin(theta) <= 0.0;
         const baseIntensity = sunIsBelowHorizon
-          ? -Math.sin(theta) * currentFillIntensity * 2.5
-          : (1.0 - Math.sin(theta)) * currentFillIntensity * 1.5;
+          ? -Math.sin(theta) * currentFillIntensity * 1.8
+          : (1.0 - Math.sin(theta)) * currentFillIntensity * 1.1;
         fillLightRef.current.intensity = baseIntensity + lightningIntensity * 1.2;
       }
 
       if (hemiLightRef.current) {
         hemiLightRef.current.color.set(lightningIntensity > 0 ? "#e2f0ff" : currentHemiSky);
         hemiLightRef.current.groundColor.set(currentHemiGround);
-        hemiLightRef.current.intensity = (currentHemiIntensity + lightningIntensity * 0.6) * 3.5;
+        hemiLightRef.current.intensity = (currentHemiIntensity + lightningIntensity * 0.6) * 2.4;
       }
 
       // 3. Move Physical Sun and Moon relative to camera (unreachable background elements)
-      const orbitRadius = 3200;
+      const orbitRadius = 2200;
       const sunX = camera.position.x + Math.cos(theta) * orbitRadius;
-      const sunY = camera.position.y + Math.sin(theta) * 2000;
-      const sunZ = camera.position.z - 600;
+      const sunY = camera.position.y + Math.sin(theta) * 1500;
+      const sunZ = camera.position.z - 400;
 
       const moonX = camera.position.x - Math.cos(theta) * orbitRadius;
-      const moonY = camera.position.y - Math.sin(theta) * 2000;
-      const moonZ = camera.position.z + 600;
+      const moonY = camera.position.y - Math.sin(theta) * 1500;
+      const moonZ = camera.position.z + 400;
 
       if (sunGroupRef.current) {
         sunGroupRef.current.position.set(sunX, sunY, sunZ);
@@ -1392,34 +1752,36 @@ export default function AtmosphereCycleManager({
       // 2. Reset Lights to Static Theme
       if (ambientLightRef.current) {
         ambientLightRef.current.color.set(theme.ambientColor);
-        ambientLightRef.current.intensity = theme.ambientIntensity * 3.0;
+        ambientLightRef.current.intensity = theme.ambientIntensity * 2.2;
       }
 
       if (sunLightRef.current) {
         sunLightRef.current.color.set(theme.sunColor);
         sunLightRef.current.position.set(theme.sunPos[0], theme.sunPos[1], theme.sunPos[2]);
-        sunLightRef.current.intensity = theme.sunIntensity * 3.5;
+        sunLightRef.current.intensity = theme.sunIntensity * 2.5;
       }
 
       if (fillLightRef.current) {
         fillLightRef.current.color.set(theme.fillColor);
         fillLightRef.current.position.set(theme.fillPos[0], theme.fillPos[1], theme.fillPos[2]);
-        fillLightRef.current.intensity = theme.fillIntensity * 3.0;
+        fillLightRef.current.intensity = theme.fillIntensity * 2.2;
       }
 
       if (hemiLightRef.current) {
         hemiLightRef.current.color.set(theme.hemiSky);
         hemiLightRef.current.groundColor.set(theme.hemiGround);
-        hemiLightRef.current.intensity = theme.hemiIntensity * 3.5;
+        hemiLightRef.current.intensity = theme.hemiIntensity * 2.4;
       }
 
       // 3. Static Physical Sun and Moon Placement relative to camera
       if (themeIndex === 1) { // Sunset
         if (sunGroupRef.current) {
+          const sunDir = new THREE.Vector3(...theme.sunPos).normalize();
+          const targetPos = sunDir.multiplyScalar(2200);
           sunGroupRef.current.position.set(
-            camera.position.x + theme.sunPos[0] * 7,
-            camera.position.y + theme.sunPos[1] * 3,
-            camera.position.z + theme.sunPos[2] * 7
+            camera.position.x + targetPos.x,
+            camera.position.y + targetPos.y,
+            camera.position.z + targetPos.z
           );
           sunGroupRef.current.visible = true;
         }
@@ -1431,10 +1793,12 @@ export default function AtmosphereCycleManager({
           sunGroupRef.current.visible = false;
         }
         if (moonGroupRef.current) {
+          const moonDir = new THREE.Vector3(...theme.fillPos).normalize();
+          const targetPos = moonDir.multiplyScalar(2200);
           moonGroupRef.current.position.set(
-            camera.position.x + theme.fillPos[0] * 7,
-            camera.position.y + theme.fillPos[1] * 4,
-            camera.position.z + theme.fillPos[2] * 7
+            camera.position.x + targetPos.x,
+            camera.position.y + targetPos.y,
+            camera.position.z + targetPos.z
           );
           moonGroupRef.current.visible = true;
         }
@@ -1448,14 +1812,12 @@ export default function AtmosphereCycleManager({
       <SceneBackground color={theme.fogColor} />
 
       <ambientLight ref={ambientLightRef} intensity={theme.ambientIntensity * 3} color={theme.ambientColor} />
-      <directionalLight ref={sunLightRef} position={theme.sunPos} intensity={theme.sunIntensity * 3.5} color={theme.sunColor} />
+      <directionalLight ref={sunLightRef} position={theme.sunPos} intensity={theme.sunIntensity * 3.5} color={theme.sunColor} shadow-bias={-0.0005} shadow-normalBias={0.04} />
       <directionalLight ref={fillLightRef} position={theme.fillPos} intensity={theme.fillIntensity * 3} color={theme.fillColor} />
       <hemisphereLight ref={hemiLightRef} args={[theme.hemiSky, theme.hemiGround, theme.hemiIntensity * 3.5]} />
 
       <SkyDome timeRef={timeRef} theme={theme} active={active} />
       <VoxelClouds active={active} timeRef={timeRef} />
-      <AmbientOceanShips cityRadius={cityRadius ?? 800} />
-      <FlyingCityShips cityRadius={cityRadius ?? 800} />
 
       {/* Visual Jagged Lightning Bolt (Voxel Aesthetic, themed accent color) */}
       <group ref={boltGroupRef} visible={false}>
@@ -1483,27 +1845,30 @@ export default function AtmosphereCycleManager({
 
       {/* Physical Sun */}
       <group ref={sunGroupRef}>
-        <mesh>
-          <sphereGeometry args={[45, 16, 16]} />
-          <meshBasicMaterial color="#fffae6" fog={false} />
+        <mesh material={sunMaterials.body}>
+          <sphereGeometry args={[70, 32, 32]} />
         </mesh>
-        <mesh>
-          <sphereGeometry args={[70, 16, 16]} />
-          <meshBasicMaterial color="#ffa116" transparent opacity={0.25} side={THREE.BackSide} fog={false} />
+        <mesh material={sunMaterials.glow}>
+          <sphereGeometry args={[105, 32, 32]} />
         </mesh>
       </group>
 
       {/* Physical Moon */}
       <group ref={moonGroupRef}>
-        <mesh>
-          <sphereGeometry args={[35, 16, 16]} />
-          <meshBasicMaterial color="#e6f2ff" fog={false} />
+        <mesh material={moonMaterials.body}>
+          <sphereGeometry args={[60, 32, 32]} />
         </mesh>
-        <mesh>
-          <sphereGeometry args={[55, 16, 16]} />
-          <meshBasicMaterial color="#7090d0" transparent opacity={0.2} side={THREE.BackSide} fog={false} />
+        <mesh material={moonMaterials.glow}>
+          <sphereGeometry args={[90, 32, 32]} />
         </mesh>
       </group>
+
+      {/* Starfield for Night Sky */}
+      <Starfield timeRef={timeRef} active={active} />
+
+      {/* Moonlight Volumetric Rays and Lens Flare */}
+      <VolumetricMoonRays moonGroupRef={moonGroupRef} />
+      <MoonLensFlare moonGroupRef={moonGroupRef} />
     </>
   );
 }

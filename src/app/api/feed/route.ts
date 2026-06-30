@@ -2,14 +2,31 @@ import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 
 const MIN_EVENTS = 8;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * @param {import('next/server').NextRequest} request
  */
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") ?? "20", 10)));
+  const rawLimit = parseInt(searchParams.get("limit") ?? "20", 10);
+
+  if (!Number.isFinite(rawLimit)) {
+    return NextResponse.json(
+      { error: "Invalid limit parameter: must be a number." },
+      { status: 400 }
+    );
+  }
+
+  const limit = Math.min(50, Math.max(1, rawLimit));
   const before = searchParams.get("before"); // UUID cursor
+
+  if (before && !UUID_RE.test(before)) {
+    return NextResponse.json(
+      { error: "Invalid cursor: must be a valid UUID." },
+      { status: 400 }
+    );
+  }
 
   const todayOnly = searchParams.get("today") === "1";
 
@@ -40,16 +57,20 @@ export async function GET(request: Request) {
   }
 
   if (before) {
-    // Get the created_at of the cursor event to page from there
     const { data: cursor } = await sb
       .from("activity_feed")
       .select("created_at")
       .eq("id", before)
-      .single();
+      .maybeSingle();
 
-    if (cursor) {
-      query = query.lt("created_at", cursor.created_at);
+    if (!cursor) {
+      return NextResponse.json(
+        { error: "Cursor not found." },
+        { status: 404 }
+      );
     }
+
+    query = query.lt("created_at", cursor.created_at);
   }
 
   let events = (await query).data ?? [];
@@ -128,7 +149,7 @@ export async function GET(request: Request) {
 async function generateSyntheticEvents(sb: ReturnType<typeof getSupabaseAdmin>, count: number) {
   const { data: devs } = await sb
     .from("developers")
-    .select("id, github_login, contributions, total_stars, rank, contributions_total, current_streak, primary_language, public_repos")
+    .select("id, github_login, contributions, total_stars, rank, lc_streak")
     .order("contributions", { ascending: false })
     .limit(50);
 
@@ -167,13 +188,13 @@ async function generateSyntheticEvents(sb: ReturnType<typeof getSupabaseAdmin>, 
       });
     } else if (roll < 0.45 && dev.total_stars > 0) {
       events.push({
-        id: `syn-stars-${dev.id}`,
+        id: `syn-rep-${dev.id}`,
         event_type: "dev_highlight",
         actor_id: dev.id,
         target_id: null,
         metadata: {
           login: dev.github_login,
-          highlight: "stars",
+          highlight: "reputation",   // renamed from "stars"
           value: dev.total_stars,
         },
         created_at: new Date().toISOString(),
@@ -191,42 +212,16 @@ async function generateSyntheticEvents(sb: ReturnType<typeof getSupabaseAdmin>, 
         },
         created_at: new Date().toISOString(),
       });
-    } else if (roll < 0.75 && dev.current_streak && dev.current_streak > 0) {
+    } else if (roll < 0.75 && dev.lc_streak && dev.lc_streak > 0) {
       events.push({
-        id: `syn-streak-${dev.id}`,
+        id: `syn-lcstreak-${dev.id}`,
         event_type: "dev_highlight",
         actor_id: dev.id,
         target_id: null,
         metadata: {
           login: dev.github_login,
-          highlight: "streak",
-          value: dev.current_streak,
-        },
-        created_at: new Date().toISOString(),
-      });
-    } else if (dev.primary_language) {
-      events.push({
-        id: `syn-lang-${dev.id}`,
-        event_type: "dev_highlight",
-        actor_id: dev.id,
-        target_id: null,
-        metadata: {
-          login: dev.github_login,
-          highlight: "language",
-          value: dev.primary_language,
-        },
-        created_at: new Date().toISOString(),
-      });
-    } else if (dev.public_repos > 0) {
-      events.push({
-        id: `syn-repos-${dev.id}`,
-        event_type: "dev_highlight",
-        actor_id: dev.id,
-        target_id: null,
-        metadata: {
-          login: dev.github_login,
-          highlight: "repos",
-          value: dev.public_repos,
+          highlight: "lc_streak",    // renamed from "streak"
+          value: dev.lc_streak,
         },
         created_at: new Date().toISOString(),
       });

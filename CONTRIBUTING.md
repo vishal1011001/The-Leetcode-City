@@ -28,7 +28,7 @@ The app runs on [http://localhost:3001](http://localhost:3001).
 
 ## Requirements
 
-- Node.js 18+
+- Node.js 24+
 - npm
 - git
 
@@ -57,6 +57,21 @@ Run `npm run setup` and it handles everything. Or copy `.env.example` to `.env.l
 
 > **Need full API access?** DM me on [LinkedIn](https://www.linkedin.com/in/ishant-singh-bisht-247a4b322/) for the service role key.
 
+### 🎮 E.Arcade Multiplayer (Supabase Realtime) Setup
+
+The E.Arcade multiplayer runs on **Supabase Realtime** (using Broadcast for live movement/chat and Presence for player listings). To enable local testing and deployment with your own Supabase instance:
+
+1. **Run Database Migrations:** 
+   Execute the migration SQL file located at [supabase/migrations/066_supabase_realtime_multiplayer.sql](file:///d:/leetcode/supabase/migrations/066_supabase_realtime_multiplayer.sql) on your database. If you use the remote Supabase dashboard, copy the SQL file contents and run it in the **SQL Editor**.
+2. **Enable Realtime Replication on Tables:**
+   * Go to **Database** -> **Replication** in the Supabase Dashboard.
+   * Click on the `supabase_realtime` publication.
+   * Toggle **Source** for `arcade_chat_messages` and `arcade_active_players` to enable Realtime events for these tables.
+3. **Note on Client-Authoritative Engine:**
+   * Realtime Broadcast is used for broadcasting position coordinates and instant chat messages.
+   * Realtime Presence lists active room users.
+   * Chat message history is logged to the `arcade_chat_messages` table for persistence.
+
 ## 🏷️ Getting Assigned to an Issue
 
 1. Find an open, unassigned issue that has been approved (i.e., the `needs-triage` label has been removed).
@@ -76,6 +91,7 @@ Run `npm run setup` and it handles everything. Or copy `.env.example` to `.env.l
 
 - **Wait for Approval:** The bot will reject assignment requests on issues that still have the `needs-triage` label.
 - **Maximum 3 open issues** per contributor at a time.
+  - **✨ Bonus:** If you are the original author who found and created the issue, you are granted **+2 bonus assignment slots** (for a maximum of 5). This ensures you can always work on the bugs you discover without them being snatched!
 - Must submit a PR within **48 hours** or be unassigned.
 - Already-assigned issues are not available.
 
@@ -94,6 +110,7 @@ Run `npm run lint` before submitting.
 1. Fork the repo
 2. Create a branch from `main` and name it with the issue number and name (e.g. `git checkout -b 12-issue-name`).
 > **🛑 STOP:** Do NOT commit your changes to your fork's `main` branch. You MUST create a new branch. Pull Requests submitted from a `main` or `master` branch will be automatically rejected by our bots.
+> **🔄 IMPORTANT:** This project is currently in a very **active development stage**. While you are working, you should regularly pull the latest changes from the upstream `main` branch (e.g. `git pull origin main --rebase`). If you do not stay up to date, your PR will likely get merge conflicts or overwrite other fixes that were just merged!
 3. Make your changes
 4. Run `npm run lint` and fix any issues
 5. Commit with a clear message (e.g. `feat: add rain weather effect`)

@@ -1,4 +1,6 @@
 import { getSupabaseAdmin } from "./supabase";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { InfrastructureError } from "./errors";
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -24,7 +26,7 @@ export interface PurchaseRecord {
   id: string;
   developer_id: number;
   item_id: string;
-  provider: "stripe" | "abacatepay" | "free" | "achievement";
+  provider: "stripe" | "abacatepay" | "cashfree" | "free" | "achievement";
   provider_tx_id: string | null;
   amount_cents: number;
   currency: "usd" | "brl";
@@ -42,7 +44,7 @@ export async function getOwnedItems(developerId: number): Promise<string[]> {
   // Items bought directly (not gifts to others)
   const { data: ownData } = await sb
     .from("purchases")
-    .select("item_id")
+    .select("item_id, provider, amount_cents")
     .eq("developer_id", developerId)
     .is("gifted_to", null)
     .eq("status", "completed");
@@ -50,11 +52,19 @@ export async function getOwnedItems(developerId: number): Promise<string[]> {
   // Items received as gifts
   const { data: giftData } = await sb
     .from("purchases")
-    .select("item_id")
+    .select("item_id, provider, amount_cents")
     .eq("gifted_to", developerId)
     .eq("status", "completed");
 
-  return [...(ownData ?? []), ...(giftData ?? [])].map((row) => row.item_id);
+  const ownFiltered = (ownData ?? [])
+    .filter(row => !(row.amount_cents === 0 && ["stripe", "cashfree", "abacatepay", "nowpayments"].includes(row.provider)))
+    .map((row) => row.item_id);
+
+  const giftFiltered = (giftData ?? [])
+    .filter(row => !(row.amount_cents === 0 && ["stripe", "cashfree", "abacatepay", "nowpayments"].includes(row.provider)))
+    .map((row) => row.item_id);
+
+  return [...ownFiltered, ...giftFiltered];
 }
 
 /** Item granted for free when a developer first claims their building. */
@@ -70,28 +80,36 @@ export async function grantFreeClaimItem(
 ): Promise<boolean> {
   const sb = getSupabaseAdmin();
 
-  // Check if already owned
-  const { data: existing } = await sb
+  // Atomically insert the purchase record.
+  // We use `upsert` with `ignoreDuplicates: true` and `onConflict: "provider_tx_id"`
+  // to prevent concurrent requests from inserting duplicate free claims.
+  const { data, error } = await sb
     .from("purchases")
-    .select("id")
-    .eq("developer_id", developerId)
-    .eq("item_id", FREE_CLAIM_ITEM)
-    .eq("status", "completed")
-    .maybeSingle();
+    .upsert(
+      {
+        developer_id: developerId,
+        item_id: FREE_CLAIM_ITEM,
+        provider: "free",
+        provider_tx_id: `free_claim_${developerId}_${FREE_CLAIM_ITEM}`,
+        amount_cents: 0,
+        currency: "usd",
+        status: "completed",
+      },
+      {
+        onConflict: "provider_tx_id",
+        ignoreDuplicates: true,
+      }
+    )
+    .select("id");
 
-  if (existing) return false;
+  if (error) {
+    console.error("[items.ts] grantFreeClaimItem: Failed to insert free purchase:", error);
+    return false;
+  }
 
-  await sb.from("purchases").insert({
-    developer_id: developerId,
-    item_id: FREE_CLAIM_ITEM,
-    provider: "free",
-    provider_tx_id: `free_claim_${developerId}`,
-    amount_cents: 0,
-    currency: "usd",
-    status: "completed",
-  });
-
-  return true;
+  // If a row was returned, it means it was inserted (newly granted).
+  // If no rows were returned, a conflict occurred (already owned).
+  return data && data.length > 0;
 }
 
 /**
@@ -145,7 +163,7 @@ export async function autoEquipIfSolo(
   const config = (existing?.config ?? { crown: null, roof: null, aura: null }) as Record<string, string | null>;
   config[zone] = itemId;
 
-  await sb.from("developer_customizations").upsert(
+  const { error: upsertError } = await sb.from("developer_customizations").upsert(
     {
       developer_id: developerId,
       item_id: "loadout",
@@ -154,6 +172,11 @@ export async function autoEquipIfSolo(
     },
     { onConflict: "developer_id,item_id" }
   );
+
+  if (upsertError) {
+    console.error("[items.ts] autoEquipIfSolo: Failed to upsert loadout:", upsertError);
+  }
+
 }
 
 export async function getOwnedItemsForDevelopers(
@@ -166,7 +189,7 @@ export async function getOwnedItemsForDevelopers(
   // Items bought directly (not gifts)
   const { data: ownData } = await sb
     .from("purchases")
-    .select("developer_id, item_id")
+    .select("developer_id, item_id, provider, amount_cents")
     .in("developer_id", developerIds)
     .is("gifted_to", null)
     .eq("status", "completed");
@@ -174,19 +197,102 @@ export async function getOwnedItemsForDevelopers(
   // Items received as gifts
   const { data: giftData } = await sb
     .from("purchases")
-    .select("gifted_to, item_id")
+    .select("gifted_to, item_id, provider, amount_cents")
     .in("gifted_to", developerIds)
     .eq("status", "completed");
 
   const result: Record<number, string[]> = {};
   for (const row of ownData ?? []) {
+    if (row.amount_cents === 0 && ["stripe", "cashfree", "abacatepay", "nowpayments"].includes(row.provider)) {
+      continue;
+    }
     if (!result[row.developer_id]) result[row.developer_id] = [];
     result[row.developer_id].push(row.item_id);
   }
   for (const row of giftData ?? []) {
+    if (row.amount_cents === 0 && ["stripe", "cashfree", "abacatepay", "nowpayments"].includes(row.provider)) {
+      continue;
+    }
     const devId = row.gifted_to as number;
     if (!result[devId]) result[devId] = [];
     result[devId].push(row.item_id);
   }
   return result;
 }
+
+/**
+ * Fulfills/records the purchase of an item for a developer.
+ * Handles consumables (adds them to inventory/counters and returns 'delivered' to bypass unique index constraints).
+ * Returns the final status to use for the purchases table.
+ */
+export async function fulfillItemPurchase(
+   developerId: number,
+   itemId: string,
+   supabaseAdminClient?: SupabaseClient
+ ): Promise<{ status: "completed" | "delivered" }> {
+   const sb = supabaseAdminClient || getSupabaseAdmin();
+
+   const { data: item, error: itemError } = await sb
+     .from("items")
+     .select("category")
+     .eq("id", itemId)
+     .single();
+
+  if (itemError) {
+    throw new InfrastructureError(
+      `[fulfillItemPurchase] Failed to fetch item "${itemId}": ${itemError.message}`,
+      itemError
+    );
+  }
+
+   const isConsumable = item?.category === "consumable";
+
+   if (!isConsumable) {
+     return { status: "completed" };
+   }
+
+   if (itemId === "streak_freeze") {
+    const { error: freezeError } = await sb.rpc("grant_streak_freeze", { p_developer_id: developerId });
+    if (freezeError) {
+      throw new InfrastructureError(
+        `[fulfillItemPurchase] grant_streak_freeze RPC failed: ${freezeError.message}`,
+        freezeError
+      );
+    }
+    const { error: logError } = await sb.from("streak_freeze_log").insert({
+       developer_id: developerId,
+       action: "purchased",
+     });
+    if (logError) {
+      throw new InfrastructureError(
+        `[fulfillItemPurchase] streak_freeze_log insert failed: ${logError.message}`,
+        logError
+      );
+    }
+   } else {
+     const BATTLE_CONSUMABLES = [
+       "anti_missile_system",
+       "anti_tank_mines",
+       "scouting_satellite",
+       "emp_shield",
+       "stealth_cloak",
+       "emp_device",
+       "sabotage_virus"
+     ];
+
+     if (BATTLE_CONSUMABLES.includes(itemId)) {
+      const { error: consumableError } = await sb.rpc("grant_consumable", {
+         p_developer_id: developerId,
+         p_item_id: itemId,
+       });
+      if (consumableError) {
+        throw new InfrastructureError(
+          `[fulfillItemPurchase] grant_consumable RPC failed for "${itemId}": ${consumableError.message}`,
+          consumableError
+        );
+      }
+     }
+   }
+
+   return { status: "delivered" };
+ } 

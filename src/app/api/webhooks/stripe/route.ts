@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { getStripe } from "@/lib/stripe";
 import { getSupabaseAdmin } from "@/lib/supabase";
-import { autoEquipIfSolo } from "@/lib/items";
+import { autoEquipIfSolo, fulfillItemPurchase } from "@/lib/items";
 import { SKY_AD_PLANS, isValidPlanId } from "@/lib/skyAdPlans";
 import { sendPurchaseNotification, sendGiftSentNotification } from "@/lib/notification-senders/purchase";
 import { sendGiftReceivedNotification } from "@/lib/notification-senders/gift";
+import { InfrastructureError } from "@/lib/errors";
 import type Stripe from "stripe";
 
 // Disable body parsing — Stripe needs raw body for signature verification
@@ -36,6 +37,22 @@ export async function POST(request: Request) {
   }
 
   const sb = getSupabaseAdmin();
+
+  // ─── Idempotency Check ───
+  // Attempt to log the event ID. If it already exists, this is a duplicate delivery.
+  const { error: idempotencyError } = await sb
+    .from("stripe_processed_events")
+    .insert({ id: event.id });
+
+  if (idempotencyError) {
+    if (idempotencyError.code === "23505") {
+      // 23505 = unique_violation (event already processed)
+      return NextResponse.json({ received: true, duplicate: true });
+    }
+    // For other transient DB errors, return 500 so Stripe retries
+    console.error("Stripe idempotency check failed:", idempotencyError);
+    return NextResponse.json({ error: "Database error" }, { status: 500 });
+  }
 
   try {
     switch (event.type) {
@@ -92,7 +109,8 @@ export async function POST(request: Request) {
               ends_at: endsAt.toISOString(),
               purchaser_email: session.customer_details?.email ?? null,
             })
-            .eq("id", ad.id);
+            .eq("id", ad.id)
+            .eq("active", false);
 
           // Auto-deactivate the "advertise" placeholder if same vehicle type
           if (plan.vehicle === "plane") {
@@ -109,6 +127,7 @@ export async function POST(request: Request) {
         // --- Shop item purchase ---
         const developerId = session.metadata?.developer_id;
         const itemId = session.metadata?.item_id;
+        const idempotencyKey = session.metadata?.idempotency_key;
         const paymentIntentId =
           typeof session.payment_intent === "string"
             ? session.payment_intent
@@ -119,43 +138,48 @@ export async function POST(request: Request) {
           break;
         }
 
-        // Find the pending purchase
+        // Idempotency check: skip if already processed
+        if (idempotencyKey) {
+          const { data: existingPurchase } = await sb
+            .from("purchases")
+            .select("id")
+            .eq("idempotency_key", idempotencyKey)
+            .maybeSingle();
+          if (existingPurchase) {
+            console.log(`[Stripe webhook] Duplicate event for ${idempotencyKey}, skipping`);
+            break;
+          }
+        }
+
+        const txId = paymentIntentId ?? session.id;
+
+        // Atomically claim the pending purchase — only succeeds if still pending
         const { data: pending } = await sb
           .from("purchases")
-          .select("id, status")
+          .update({
+            status: "processing",
+            provider_tx_id: txId,
+          })
           .eq("developer_id", Number(developerId))
           .eq("item_id", itemId)
           .eq("status", "pending")
           .eq("provider", "stripe")
+          .select()
           .maybeSingle();
 
         if (pending) {
+          const giftedTo = session.metadata?.gifted_to;
+          const ownerId = giftedTo ? Number(giftedTo) : Number(developerId);
+          const { status: purchaseStatus } = await fulfillItemPurchase(ownerId, itemId, sb);
+
           await sb
             .from("purchases")
             .update({
-              status: "completed",
-              provider_tx_id: paymentIntentId ?? session.id,
+              status: purchaseStatus,
             })
             .eq("id", pending.id);
 
-          // Streak freeze: grant via RPC instead of normal item flow
-          if (itemId === "streak_freeze") {
-            await sb.rpc("grant_streak_freeze", { p_developer_id: Number(developerId) });
-            await sb.from("streak_freeze_log").insert({
-              developer_id: Number(developerId),
-              action: "purchased",
-            });
-            await sb.from("activity_feed").insert({
-              event_type: "item_purchased",
-              actor_id: Number(developerId),
-              metadata: { login: session.metadata?.github_login, item_id: "streak_freeze" },
-            });
-            break;
-          }
-
           // Auto-equip if solo item in zone
-          const giftedTo = session.metadata?.gifted_to;
-          const ownerId = giftedTo ? Number(giftedTo) : Number(developerId);
           await autoEquipIfSolo(ownerId, itemId);
 
           // Insert feed event + send notifications
@@ -191,27 +215,65 @@ export async function POST(request: Request) {
             sendPurchaseNotification(Number(developerId), githubLogin ?? "", pending.id, itemId);
           }
         } else {
-          // Check if already completed (webhook duplicate)
-          const { data: existing } = await sb
-            .from("purchases")
-            .select("id")
-            .eq("developer_id", Number(developerId))
-            .eq("item_id", itemId)
-            .eq("status", "completed")
-            .maybeSingle();
+          const giftedTo = session.metadata?.gifted_to;
+          const ownerId = giftedTo ? Number(giftedTo) : Number(developerId);
 
-          if (!existing) {
-            // Create completed purchase directly (edge case: pending was cleaned up)
-            await sb.from("purchases").insert({
+          // Verify amount and currency match the item's expected price
+          const expectedItem = await sb
+            .from("items")
+            .select("price_usd_cents, price_brl_cents")
+            .eq("id", itemId)
+            .single();
+          if (expectedItem.data) {
+            const expectedCents = session.currency === "brl"
+              ? expectedItem.data.price_brl_cents
+              : expectedItem.data.price_usd_cents;
+            if (Number(session.amount_total) !== expectedCents) {
+              console.error(
+                `Price mismatch for item ${itemId}: expected ${expectedCents} ${session.currency}, ` +
+                `got ${session.amount_total}`
+              );
+              break;
+            }
+          }
+
+          // Check if this txId already has a completed/delivered purchase
+          const { data: alreadyProcessed } = await sb
+            .from("purchases")
+            .select("id, status")
+            .eq("provider_tx_id", txId)
+            .in("status", ["completed", "delivered"])
+            .maybeSingle();
+          if (alreadyProcessed) {
+            console.log(`Purchase ${alreadyProcessed.id} already fulfilled — skipping duplicate webhook`);
+            break;
+          }
+
+          // Use the UNIQUE constraint on provider_tx_id to guard against
+          // concurrent insert — only the first webhook wins
+          const { data: inserted } = await sb
+            .from("purchases")
+            .insert({
               developer_id: Number(developerId),
               item_id: itemId,
               provider: "stripe",
-              provider_tx_id: paymentIntentId ?? session.id,
+              provider_tx_id: txId,
+              idempotency_key: idempotencyKey ?? null,
               amount_cents: session.amount_total ?? 0,
               currency: session.currency ?? "usd",
-              status: "completed",
-            });
-            await autoEquipIfSolo(Number(developerId), itemId);
+              status: "processing",
+              ...(giftedTo ? { gifted_to: Number(giftedTo) } : {}),
+            })
+            .select("id")
+            .maybeSingle();
+
+          if (inserted) {
+            const { status: purchaseStatus } = await fulfillItemPurchase(ownerId, itemId, sb);
+            await sb
+              .from("purchases")
+              .update({ status: purchaseStatus })
+              .eq("id", inserted.id);
+            await autoEquipIfSolo(ownerId, itemId);
           }
         }
         break;
@@ -238,12 +300,12 @@ export async function POST(request: Request) {
             : charge.payment_intent?.id;
 
         if (paymentIntentId) {
-          // Refund shop purchases
+          // Refund shop purchases (both completed and delivered consumables)
           await sb
             .from("purchases")
             .update({ status: "refunded" })
             .eq("provider_tx_id", paymentIntentId)
-            .eq("status", "completed");
+            .in("status", ["completed", "delivered"]);
 
           // Refund sky ads: find checkout session for this payment intent
           const stripe = getStripe();
@@ -263,10 +325,14 @@ export async function POST(request: Request) {
       }
     }
   } catch (err) {
-    // Log but return 200 — we don't want Stripe to retry on business logic errors
-    console.error("Stripe webhook handler error:", err);
+    if (err instanceof InfrastructureError) {
+      // Transient failure — let Stripe retry by returning 500
+      console.error("[Stripe webhook] Infrastructure error, returning 500 for retry:", err.message, err.cause);
+      return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    }
+    // BusinessLogicError or unknown — return 200 to prevent futile retries
+    console.error("[Stripe webhook] Business logic or unexpected error:", err);
   }
 
-  // Always return 200 to prevent Stripe retries
   return NextResponse.json({ received: true });
 }

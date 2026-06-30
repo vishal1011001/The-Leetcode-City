@@ -63,21 +63,21 @@ export function getDailyMissions(
   const seed = hashStr(`${dateStr}:${developerId}`);
   const rng = mulberry32(seed);
 
-  // Filter pool: exclude checkin (it's always included) + mobile filter
-  let pool = MISSION_POOL.filter((m) => m.id !== "checkin");
-  if (isMobile) {
-    pool = pool.filter((m) => !m.desktopOnly);
-  }
-
-  // Fisher-Yates shuffle
+  // 1. Always shuffle the ENTIRE pool (excluding checkin) to ensure
+  // deterministic relative order across all devices.
+  const pool = MISSION_POOL.filter((m) => m.id !== "checkin");
   const shuffled = [...pool];
   for (let i = shuffled.length - 1; i > 0; i--) {
     const j = Math.floor(rng() * (i + 1));
     [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
   }
 
+  // 2. Filter for device support AFTER shuffling. This ensures that
+  // any missions available on both devices remain assigned to the user.
+  const filtered = isMobile ? shuffled.filter((m) => !m.desktopOnly) : shuffled;
+
   const checkin = MISSION_POOL.find((m) => m.id === "checkin")!;
-  return [checkin, shuffled[0], shuffled[1]];
+  return [checkin, filtered[0], filtered[1]];
 }
 
 /** Get today's date string in YYYY-MM-DD (UTC). */
@@ -96,16 +96,21 @@ export function getTodayStr(): string {
 export async function trackDailyMission(
   developerId: number,
   missionId: string,
-  extra?: { score?: number },
+  extra?: { score?: number; isMobile?: boolean },
 ): Promise<void> {
   try {
     const today = getTodayStr();
-    const missions = getDailyMissions(developerId, today);    
-    const mission = missions.find((m) => m.id === missionId);
-    if (!mission) return; // not assigned today, skip
+    // A user's assigned missions can differ between mobile and desktop
+    // (desktopOnly missions shift the selection), and the device making the
+    // request isn't known here. Credit the mission if it belongs to either
+    // set so mobile users aren't silently denied progress; desktopOnly
+    // missions stay gated by the score checks below.
+    const mission =
+      getDailyMissions(developerId, today, false).find((m) => m.id === missionId) ??
+      getDailyMissions(developerId, today, true).find((m) => m.id === missionId);
+    if (!mission) return;
 
-    // For fly score missions, check the actual score threshold
-    if (missionId === "fly_score_50" && (extra?.score ?? 0) < 50) return;
+    if (missionId === "fly_score_50"  && (extra?.score ?? 0) < 50)  return;
     if (missionId === "fly_score_150" && (extra?.score ?? 0) < 150) return;
 
     const sb = getSupabaseAdmin();

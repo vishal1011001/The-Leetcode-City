@@ -44,7 +44,7 @@ const LC_HEADERS = {
 };
 
 import { parseMaxStreak } from "@/lib/leetcode";
-import { calculateLeetcodeXp } from "@/lib/xp";
+import { calculateLeetcodeXp, mergeBaseXp } from "@/lib/xp";
 
 async function fetchLeetCodeUser(username: string) {
   const currentYear = new Date().getFullYear();
@@ -65,6 +65,10 @@ async function fetchLeetCodeUser(username: string) {
           acSubmissionNum { difficulty count }
           totalSubmissionNum { difficulty count }
         }
+        languageProblemCount {
+          languageName
+          problemsSolved
+        } 
         yearCurrent: userCalendar(year: ${currentYear}) { streak totalActiveDays submissionCalendar }
         yearPrev: userCalendar(year: ${prevYear}) { submissionCalendar }
       }
@@ -132,7 +136,7 @@ export async function GET(
   const { data: cached } = await sb
     .from("developers")
     .select("*")
-    .eq("github_login", username.toLowerCase())
+    .ilike("github_login", username)
     .single();
 
   if (cached) {
@@ -173,8 +177,13 @@ export async function GET(
 
   if (!cachedRecord) {
     const data = await fetchLeetCodeUser(username);
-    if (!data?.matchedUser) {
-      if (cached) return NextResponse.json(cached); // return stale if LC fetch fails
+    if (!data) {
+      // Network/parsing error — return stale cached if available
+      if (cached) return NextResponse.json(cached);
+      return NextResponse.json({ error: "Failed to fetch LeetCode data" }, { status: 502 });
+    }
+    if (!data.matchedUser) {
+      // LeetCode explicitly says user doesn't exist — return 404 regardless of cache
       return NextResponse.json({ error: "User not found on LeetCode" }, { status: 404 });
     }
 
@@ -188,6 +197,11 @@ export async function GET(
     const totalSub = getTot("All");
     const activeDays = user.userCalendar?.totalActiveDays ?? 0;
     const lcRank = user.profile?.ranking ?? 999999;
+    const languages = user.languageProblemCount ?? [];
+    const dominantLanguage = languages.length > 0
+      ? [...languages].sort((a: any, b: any) => 
+      b.problemsSolved - a.problemsSolved)[0].languageName
+      : null;
     const litPercentage = Math.min(0.92, Math.max(0.15, activeDays / 365));
 
     // Stable ID from username
@@ -234,6 +248,7 @@ export async function GET(
       lc_twitter: user.profile?.twitterUrl ?? null,
       lc_linkedin: user.profile?.linkedinUrl ?? null,
       lc_github: user.profile?.githubUrl ?? null,
+      primary_language:dominantLanguage,
       // Tag stats
       lc_tag_stats: [
         ...(user.tagProblemCounts?.advanced ?? []),
@@ -253,13 +268,15 @@ export async function GET(
       lc_streak: record.lc_streak
     });
 
-    // We must merge new Base XP with existing Base XP safely. 
+    // We must merge new Base XP with existing Base XP safely.
     // Wait to upsert until we check if the user exists so we know what to append.
-    const mergeRecord = { ...record, xp_github: newBaseXp, xp_total: newBaseXp };
-    
-    if (cached) {
-        mergeRecord.xp_total = (cached.xp_total - cached.xp_github) + newBaseXp;
-    }
+    // mergeBaseXp preserves earned (non-base) XP and never goes negative; for a
+    // brand-new record (no cache) prev values are 0, so it returns newBaseXp.
+    const mergeRecord = {
+      ...record,
+      xp_github: newBaseXp,
+      xp_total: mergeBaseXp(cached?.xp_total, cached?.xp_github, newBaseXp),
+    };
 
     const { data: upsertedResult, error: upsertError } = await sb
       .from("developers")
@@ -277,13 +294,13 @@ export async function GET(
   const [purchasesResult, giftPurchasesResult, customizationsResult, raidTagsResult] = await Promise.all([
     sb
       .from("purchases")
-      .select("item_id")
+      .select("item_id, provider, amount_cents")
       .eq("developer_id", upserted.id)
       .is("gifted_to", null)
       .eq("status", "completed"),
     sb
       .from("purchases")
-      .select("item_id")
+      .select("item_id, provider, amount_cents")
       .eq("gifted_to", upserted.id)
       .eq("status", "completed"),
     sb
@@ -299,8 +316,12 @@ export async function GET(
   ]);
 
   const ownedItems = [
-    ...(purchasesResult.data ?? []).map(p => p.item_id),
-    ...(giftPurchasesResult.data ?? []).map(p => p.item_id),
+    ...(purchasesResult.data ?? [])
+      .filter(p => !(p.amount_cents === 0 && ["stripe", "cashfree", "abacatepay", "nowpayments"].includes(p.provider)))
+      .map(p => p.item_id),
+    ...(giftPurchasesResult.data ?? [])
+      .filter(p => !(p.amount_cents === 0 && ["stripe", "cashfree", "abacatepay", "nowpayments"].includes(p.provider)))
+      .map(p => p.item_id),
   ];
 
   const customColor = (customizationsResult.data ?? []).find(c => c.item_id === "custom_color")?.config?.color ?? null;
