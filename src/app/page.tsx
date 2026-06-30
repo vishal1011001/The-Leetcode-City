@@ -359,8 +359,10 @@ function HomeContent() {
     try {
       const savedWeather = localStorage.getItem("leetcodecity_weather_mode");
       if (savedWeather === "sunny" || savedWeather === "rainy" || savedWeather === "windy" || savedWeather === "stormy" || savedWeather === "snowy") {
-        setWeatherMode(savedWeather as any);
+        setWeatherMode(savedWeather as
+          "sunny" | "rainy" | "windy" | "stormy" | "snowy");
       }
+
     } catch { }
   }, []);
 
@@ -596,7 +598,7 @@ function HomeContent() {
         .from("arcade_active_players")
         .select("user_id", { count: "exact", head: true })
         .gt("last_heartbeat", cutoff)
-        .then((res: any) => {
+        .then((res: { count: number | null }) => {
           if (res.count != null) {
             setArcadeOnline(res.count);
           }
@@ -760,7 +762,7 @@ function HomeContent() {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(
-      async (event: any, s: Session | null) => {
+      async (event: string, s: Session | null) => {
         if (event !== "TOKEN_REFRESHED") {
           await updateSession(s);
           // Auto-open the Link LeetCode modal when user first signs in
@@ -1994,7 +1996,7 @@ function HomeContent() {
         if (data.equippedRelicId) {
           setEquippedRelicId(data.equippedRelicId);
           const active = (data.relics || STATIC_RELICS).find(
-            (r: any) => r.id === data.equippedRelicId
+            (r: Relic) => r.id === data.equippedRelicId
           );
           if (active) {
             setRelicFocus({ x: active.target_x, y: active.target_y, z: active.target_z });
@@ -2069,7 +2071,7 @@ function HomeContent() {
     if (cached && Date.now() - cached.timestamp < 60_000) {
       setFeedback({
         type: "error",
-        code: cached.code as any,
+        code: cached.code as "not-found" | "org" | "no-activity" | "rate-limit" | "github-rate-limit" | "network" | "generic",
         username: trimmed,
       });
       return;
@@ -2271,8 +2273,8 @@ function HomeContent() {
       setShowLinkModal(false);
       trackBuildingClaimed(data.leetcode_username);
       await reloadCity();
-    } catch (err: any) {
-      setLinkError(err.message);
+    } catch (err: unknown) {
+      setLinkError(err instanceof Error ? err.message : String(err));
     } finally {
       setLinking(false);
     }
@@ -2298,8 +2300,8 @@ function HomeContent() {
         data.message || "Claim reset. You can now link a new GitHub account.",
       );
       await reloadCity();
-    } catch (err: any) {
-      setResetMsg("Error: " + err.message);
+    } catch (err: unknown) {
+      setResetMsg("Error: " + (err instanceof Error ? err.message : String(err)));
     } finally {
       setResetting(false);
     }
@@ -3430,8 +3432,8 @@ function HomeContent() {
                                         if (mountedRef.current) setVsCodeKeyCopied(false);
                                       }, 2000);
                                     }
-                                  } catch (e: any) {
-                                    if (e.name === "AbortError") return;
+                                  } catch (e: unknown) {
+                                    if (e instanceof Error && e.name === "AbortError") return;
                                   } finally {
                                     if (mountedRef.current) {
                                       setVsCodeKeyLoading(false);
@@ -4564,24 +4566,24 @@ function HomeContent() {
                       .findIndex((b) => b.login === selectedBuilding.login) + 1;
 
                   const lcRank =
-                    ((selectedBuilding as any).rank as number) ?? 0;
+                    selectedBuilding.rank ?? 0;
                   const lcRankStr =
                     lcRank === 0 || lcRank === 999999
                       ? "N/A"
                       : `#${lcRank.toLocaleString()}`;
                   const solved = selectedBuilding.contributions;
                   const easySolved =
-                    ((selectedBuilding as any).easy_solved as number) ?? 0;
+                    selectedBuilding.easy_solved ?? 0;
                   const medSolved =
-                    ((selectedBuilding as any).medium_solved as number) ?? 0;
+                    selectedBuilding.medium_solved ?? 0;
                   const hardSolved =
-                    ((selectedBuilding as any).hard_solved as number) ?? 0;
+                    selectedBuilding.hard_solved ?? 0;
                   const contestRating =
-                    ((selectedBuilding as any).contest_rating as number) ?? 0;
+                    selectedBuilding.contest_rating ?? 0;
                   const streak =
-                    ((selectedBuilding as any).lc_streak as number) ?? 0;
+                    selectedBuilding.lc_streak ?? 0;
                   const reputation = selectedBuilding.total_stars;
-                  const acceptanceRateRaw = (selectedBuilding as any).acceptance_rate;
+                  const acceptanceRateRaw = selectedBuilding.acceptance_rate;
                   const acceptanceRate = typeof acceptanceRateRaw === "number" && !isNaN(acceptanceRateRaw) ? acceptanceRateRaw : -1;
 
                   const stats = [
@@ -4600,7 +4602,7 @@ function HomeContent() {
                     },
                     {
                       label: "Language",
-                      value: (selectedBuilding as any)?.primary_language ?? "--",
+                      value: selectedBuilding.primary_language ?? "--",
                     },
                     ...(easySolved || medSolved || hardSolved
                       ? [
@@ -5062,10 +5064,10 @@ function HomeContent() {
                   <div
                     className="flex justify-center py-2 sm:hidden"
                     onTouchStart={(e) => {
-                      (e.currentTarget as any)._touchY = e.touches[0].clientY;
+                      (e.currentTarget as HTMLDivElement & { _touchY?: number })._touchY = e.touches[0].clientY;
                     }}
                     onTouchEnd={(e) => {
-                      const start = (e.currentTarget as any)._touchY;
+                      const start = (e.currentTarget as HTMLDivElement & { _touchY?: number })._touchY;
                       if (
                         start != null &&
                         e.changedTouches[0].clientY - start > 50
